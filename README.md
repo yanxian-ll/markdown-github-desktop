@@ -91,3 +91,15 @@ src-tauri/
 本项目是现代桌面重写，不是旧项目的原地升级。详见 `docs/MIGRATION_FROM_STACKEDIT.md`。
 
 StackEdit 的 Apache-2.0 许可证副本位于 `third-party/stackedit/LICENSE`。
+
+
+## Windows/Vite Mermaid dependency note
+
+Mermaid is pinned to `10.9.3` intentionally. Some newer Mermaid 11.x package builds can fail Vite dependency scanning on Windows with `Failed to resolve entry for package "mermaid"`. If you already installed dependencies before this pin, run:
+
+```powershell
+Remove-Item -Recurse -Force node_modules
+Remove-Item -Force package-lock.json
+npm install
+npm run dev
+```

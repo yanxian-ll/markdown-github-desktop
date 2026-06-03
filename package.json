@@ -35,7 +35,7 @@
     "markdown-it-mark": "^4.0.0",
     "markdown-it-sub": "^2.0.0",
     "markdown-it-sup": "^2.0.0",
-    "mermaid": "^11.7.0",
+    "mermaid": "10.9.3",
     "pinia": "^3.0.3",
     "prismjs": "^1.30.0",
     "vue": "^3.5.22"
