@@ -1,0 +1,8 @@
+Markdown GitHub Desktop
+
+This project was generated as a modern desktop rewrite inspired by StackEdit's core Markdown editing and synchronization model.
+
+StackEdit is licensed under Apache-2.0. A copy of the upstream StackEdit license is included at:
+third-party/stackedit/LICENSE
+
+This rewrite does not include StackEdit's publishing integrations, Chrome app, Helm chart, Google Drive/Dropbox/GitLab/WordPress/Zendesk providers, sponsorship logic, or legacy Vue 2/Webpack application shell.
