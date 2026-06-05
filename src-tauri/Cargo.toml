@@ -1,6 +1,6 @@
 [package]
 name = "markdown-latex-git-desktop"
-version = "0.5.2"
+version = "0.7.0"
 description = "A cross-platform Markdown/LaTeX editor with local Git workspace and manual GitHub push"
 authors = ["Markdown LaTeX Git Desktop Contributors"]
 edition = "2021"

@@ -704,6 +704,187 @@ fn find_latex_pdf(root_dir: String, relative_path: String) -> Result<Option<Stri
     Ok(pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()))
 }
 
+fn parse_pandoc_diagnostics(log: &str, relative_path: &str) -> Vec<LatexDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for line in log.lines() {
+        let lower = line.to_ascii_lowercase();
+        let level = if lower.contains("error") || lower.contains("failed") {
+            Some("error")
+        } else if lower.contains("warning") || lower.contains("[warning]") {
+            Some("warning")
+        } else {
+            None
+        };
+        let Some(level) = level else { continue; };
+        let mut parsed_line: Option<u32> = None;
+        if let Some(index) = line.find(relative_path) {
+            let rest = &line[index + relative_path.len()..];
+            if let Some(rest) = rest.strip_prefix(':') {
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                parsed_line = digits.parse::<u32>().ok();
+            }
+        }
+        diagnostics.push(LatexDiagnostic {
+            level: level.into(),
+            message: line.trim().to_string(),
+            file: Some(relative_path.to_string()),
+            line: parsed_line,
+        });
+    }
+    diagnostics
+}
+
+fn parse_simple_attrs_and_body(content: &str) -> (std::collections::BTreeMap<String, String>, String) {
+    let mut attrs = std::collections::BTreeMap::new();
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.lines().collect();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if line.is_empty() { index += 1; continue; }
+        if line.chars().all(|c| c == '-') && line.len() >= 3 {
+            index += 1;
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else { break; };
+        let key = key.trim().to_ascii_lowercase();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { break; }
+        attrs.insert(key, value.trim().to_string());
+        index += 1;
+    }
+    (attrs, lines[index..].join("\n").trim().to_string())
+}
+
+fn latex_escape_text(value: &str) -> String {
+    value
+        .replace('\\', "\\textbackslash{}")
+        .replace('&', "\\&")
+        .replace('%', "\\%")
+        .replace('$', "\\$")
+        .replace('#', "\\#")
+        .replace('_', "\\_")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+}
+
+fn markdown_fence_to_latex(kind: &str, content: &str) -> String {
+    let (attrs, body) = parse_simple_attrs_and_body(content);
+    let caption = attrs.get("caption").or_else(|| attrs.get("title")).cloned().unwrap_or_default();
+    let label = attrs.get("label").cloned().unwrap_or_default();
+    match kind {
+        "figure" => {
+            let src = attrs.get("src").or_else(|| attrs.get("image")).or_else(|| attrs.get("path")).cloned().unwrap_or_else(|| body.lines().next().unwrap_or_default().trim().to_string());
+            let width = attrs.get("width").cloned().unwrap_or_else(|| "0.9\\linewidth".to_string());
+            let placement = attrs.get("placement").cloned().unwrap_or_else(|| "htbp".to_string());
+            format!("\\begin{{figure}}[{placement}]\n\\centering\n{}\n{}{}\\end{{figure}}\n",
+                if src.is_empty() { "% figure src missing".to_string() } else { format!("\\includegraphics[width={width}]{{{src}}}") },
+                if caption.is_empty() { String::new() } else { format!("\\caption{{{}}}\n", latex_escape_text(&caption)) },
+                if label.is_empty() { String::new() } else { format!("\\label{{{label}}}\n") },
+            )
+        }
+        "table" => {
+            let placement = attrs.get("placement").cloned().unwrap_or_else(|| "htbp".to_string());
+            format!("\\begin{{table}}[{placement}]\n\\centering\n{}{}{}\\end{{table}}\n",
+                if caption.is_empty() { String::new() } else { format!("\\caption{{{}}}\n", latex_escape_text(&caption)) },
+                if label.is_empty() { String::new() } else { format!("\\label{{{label}}}\n") },
+                if body.is_empty() { "% table body missing\n".to_string() } else { format!("{}\n", body) },
+            )
+        }
+        "algorithm" => {
+            format!("\\begin{{algorithm}}\n{}{}\\begin{{verbatim}}\n{}\n\\end{{verbatim}}\n\\end{{algorithm}}\n",
+                if caption.is_empty() { String::new() } else { format!("\\caption{{{}}}\n", latex_escape_text(&caption)) },
+                if label.is_empty() { String::new() } else { format!("\\label{{{label}}}\n") },
+                body,
+            )
+        }
+        "theorem" => {
+            let env = attrs.get("env").cloned().unwrap_or_else(|| "theorem".to_string());
+            format!("\\begin{{{env}}}{}\n{}{}\\end{{{env}}}\n",
+                if caption.is_empty() { String::new() } else { format!("[{}]", latex_escape_text(&caption)) },
+                if label.is_empty() { String::new() } else { format!("\\label{{{label}}}\n") },
+                body,
+            )
+        }
+        _ => content.to_string(),
+    }
+}
+
+fn preprocess_markdown_latex_blocks(markdown: &str) -> String {
+    let mut out = String::new();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        let fence_kind = if trimmed.starts_with("```") {
+            let info = trimmed.trim_start_matches('`').trim().to_ascii_lowercase();
+            match info.as_str() {
+                "figure" | "latex-figure" => Some("figure"),
+                "table" | "latex-table" => Some("table"),
+                "algorithm" | "latex-algorithm" => Some("algorithm"),
+                "theorem" | "latex-theorem" => Some("theorem"),
+                _ => None,
+            }
+        } else { None };
+        if let Some(kind) = fence_kind {
+            index += 1;
+            let mut content = Vec::new();
+            while index < lines.len() && !lines[index].trim().starts_with("```") {
+                content.push(lines[index]);
+                index += 1;
+            }
+            if index < lines.len() { index += 1; }
+            out.push_str("\n```{=latex}\n");
+            out.push_str(&markdown_fence_to_latex(kind, &content.join("\n")));
+            out.push_str("```\n\n");
+        } else {
+            out.push_str(lines[index]);
+            out.push('\n');
+            index += 1;
+        }
+    }
+    out
+}
+
+fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
+    let root = PathBuf::from(root_dir);
+    let md_path = safe_join(&root, &relative_path)?;
+    if !md_path.exists() {
+        return Err(format!("Markdown 文件不存在：{}", md_path.display()));
+    }
+    let work_dir = md_path.parent().ok_or_else(|| "无法获取 Markdown 文件目录。".to_string())?;
+    let file_name = md_path.file_name().and_then(|v| v.to_str()).ok_or_else(|| "Markdown 文件名无效。".to_string())?;
+    let stem = md_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "Markdown 文件名无效。".to_string())?;
+    let source = fs::read_to_string(&md_path).map_err(|error| format!("无法读取 Markdown 文件：{error}"))?;
+    let build_dir = root.join(".paper-notes").join("pandoc-build");
+    fs::create_dir_all(&build_dir).map_err(|error| format!("无法创建 Pandoc 构建目录：{error}"))?;
+    let temp_name = format!("{stem}.pandoc.md");
+    let temp_path = build_dir.join(&temp_name);
+    fs::write(&temp_path, preprocess_markdown_latex_blocks(&source)).map_err(|error| format!("无法写入 Pandoc 临时文件：{error}"))?;
+    let pdf_path = md_path.with_extension("pdf");
+    let mut cmd = Command::new("pandoc");
+    cmd.current_dir(work_dir)
+        .arg(&temp_path)
+        .args(["--from", "markdown+tex_math_dollars+raw_tex+yaml_metadata_block+fenced_divs"])
+        .args(["--standalone", "--pdf-engine=xelatex"])
+        .args(["-o", &pdf_path.to_string_lossy()]);
+    let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
+    let log = format!("$ pandoc {file_name} --pdf-engine=xelatex -o {}\n{}{}", pdf_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    Ok(LatexBuildResult {
+        ok: output.status.success() && pdf_path.exists(),
+        command: format!("pandoc {file_name} --pdf-engine=xelatex"),
+        pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
+        diagnostics: parse_pandoc_diagnostics(&log, &relative_path),
+        log,
+    })
+}
+
+#[tauri::command]
+async fn build_markdown_pandoc(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || build_markdown_pandoc_blocking(root_dir, relative_path))
+        .await
+        .map_err(|error| format!("Pandoc 后台任务失败：{error}"))?
+}
+
 fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
     let root = PathBuf::from(root_dir);
     let requested_tex_path = safe_join(&root, &relative_path)?;
@@ -949,6 +1130,7 @@ pub fn run() {
             git_status,
             commit_and_push,
             build_latex,
+            build_markdown_pandoc,
             find_latex_pdf,
             synctex_forward,
             synctex_reverse,

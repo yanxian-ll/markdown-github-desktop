@@ -73,11 +73,51 @@ md.core.ruler.push('source_line_attrs', (state) => {
   }
 });
 
+
+const LATEX_FENCE_TYPES = new Set(['figure', 'table', 'algorithm', 'theorem']);
+
+function splitFenceFrontMatter(content: string): { attrs: Record<string, string>; body: string } {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const attrs: Record<string, string> = {};
+  let index = 0;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    if (/^---+$/.test(line.trim())) {
+      index += 1;
+      break;
+    }
+    const match = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+    if (!match) break;
+    attrs[match[1].toLowerCase()] = match[2].trim();
+  }
+  return { attrs, body: lines.slice(index).join('\n').trim() };
+}
+
+function renderLatexFence(type: string, content: string): string {
+  const { attrs, body } = splitFenceFrontMatter(content);
+  const title = attrs.title || attrs.caption || '';
+  const label = attrs.label || '';
+  if (type === 'figure') {
+    const src = attrs.src || attrs.image || attrs.path || body.split(/\n/).find(Boolean)?.trim() || '';
+    const width = attrs.width || '0.9\\linewidth';
+    return `<figure class="md-latex-block md-latex-figure" data-block-type="figure">${src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(title || src)}" style="max-width:${escapeHtml(width.includes('\\') ? '90%' : width)}">` : ''}${title ? `<figcaption>${escapeHtml(title)}</figcaption>` : ''}${label ? `<small>${escapeHtml(label)}</small>` : ''}</figure>`;
+  }
+  if (type === 'table') {
+    return `<section class="md-latex-block md-latex-table" data-block-type="table">${title ? `<header>${escapeHtml(title)}</header>` : ''}<pre>${escapeHtml(body || content)}</pre>${label ? `<small>${escapeHtml(label)}</small>` : ''}</section>`;
+  }
+  if (type === 'algorithm') {
+    return `<section class="md-latex-block md-latex-algorithm" data-block-type="algorithm">${title ? `<header>${escapeHtml(title)}</header>` : '<header>Algorithm</header>'}<pre>${escapeHtml(body || content)}</pre>${label ? `<small>${escapeHtml(label)}</small>` : ''}</section>`;
+  }
+  return `<section class="md-latex-block md-latex-theorem" data-block-type="theorem">${title ? `<header>${escapeHtml(title)}</header>` : '<header>Theorem</header>'}<div>${escapeHtml(body || content).replace(/\n/g, '<br>')}</div>${label ? `<small>${escapeHtml(label)}</small>` : ''}</section>`;
+}
+
 const defaultFence = md.renderer.rules.fence?.bind(md.renderer.rules);
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
   if (language === 'mermaid') return `<pre class="mermaid">${escapeHtml(token.content)}</pre>`;
+  if (LATEX_FENCE_TYPES.has(language)) return renderLatexFence(language, token.content);
   return defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
 };
 

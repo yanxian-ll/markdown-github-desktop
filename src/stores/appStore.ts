@@ -4,6 +4,7 @@ import { sampleLatex, sampleMarkdown } from "../services/markdown";
 import { makeId } from "../services/hash";
 import {
   buildLatex as buildLatexFile,
+  buildMarkdownPandoc as buildMarkdownPandocFile,
   cleanLatex as cleanLatexFiles,
   cloneOrUpdateRepository,
   commitAndPush,
@@ -49,6 +50,17 @@ import type {
   TexSourcePoint,
   PersistedAppState,
 } from "../types/app";
+import type {
+  BibEntryItem,
+  LatexOutlineItem,
+  ProjectLatexIndex,
+} from "../types/latexIntelligence";
+import { emptyLatexIndex } from "../types/latexIntelligence";
+import {
+  buildProjectLatexIndex,
+  resolveIndexedFilePath,
+  resolveTexLikePath,
+} from "../services/latexIntelligence";
 
 const GITHUB_TOKEN_ACCOUNT = "github-token";
 const COMMON_EXTENSIONS = [
@@ -130,7 +142,6 @@ function singleFileNodeFromName(name: string): FileNode {
     children: [],
   };
 }
-
 
 function defaultDocument(): MarkdownDocument {
   return {
@@ -561,7 +572,10 @@ function serializeReviewSummary(items: PaperAnnotation[]): string {
   return lines.join("\n");
 }
 
-function serializeAnnotationExportMarkdown(items: PaperAnnotation[], title = "当前文件批注"): string {
+function serializeAnnotationExportMarkdown(
+  items: PaperAnnotation[],
+  title = "当前文件批注",
+): string {
   const sorted = items
     .slice()
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -573,14 +587,25 @@ function serializeAnnotationExportMarkdown(items: PaperAnnotation[], title = "�
     "",
   ];
   for (const item of sorted) {
-    const file = item.texAnchor?.file || item.markdownAnchor?.file || item.documentPath || "未知文件";
+    const file =
+      item.texAnchor?.file ||
+      item.markdownAnchor?.file ||
+      item.documentPath ||
+      "未知文件";
     const line = item.texAnchor?.line
       ? `:${item.texAnchor.line}${item.texAnchor.lineEnd && item.texAnchor.lineEnd !== item.texAnchor.line ? `-${item.texAnchor.lineEnd}` : ""}`
       : item.pdfAnchor?.page
         ? ` · PDF 第 ${item.pdfAnchor.page} 页`
         : "";
-    const quote = item.selectedText || item.markdownAnchor?.textQuote || item.pdfAnchor?.textQuote || item.texAnchor?.sourceText || item.sourceText;
-    lines.push(`## ${item.status === "open" ? "未处理" : item.status === "resolved" ? "已解决" : "忽略"} · ${file}${line}`);
+    const quote =
+      item.selectedText ||
+      item.markdownAnchor?.textQuote ||
+      item.pdfAnchor?.textQuote ||
+      item.texAnchor?.sourceText ||
+      item.sourceText;
+    lines.push(
+      `## ${item.status === "open" ? "未处理" : item.status === "resolved" ? "已解决" : "忽略"} · ${file}${line}`,
+    );
     lines.push("");
     if (quote) {
       lines.push("> 选中内容：");
@@ -598,7 +623,10 @@ function serializeAnnotationExportMarkdown(items: PaperAnnotation[], title = "�
     messages.forEach((message, index) => {
       const author = message.author || "未知用户";
       const time = message.updatedAt || message.createdAt;
-      const prefix = index === 0 ? `${author} 评论` : `${author} 回复${message.replyToAuthor ? ` ${message.replyToAuthor}` : ""}`;
+      const prefix =
+        index === 0
+          ? `${author} 评论`
+          : `${author} 回复${message.replyToAuthor ? ` ${message.replyToAuthor}` : ""}`;
       lines.push(`- **${prefix}**（${time}）：${message.body}`);
     });
     lines.push("");
@@ -659,11 +687,16 @@ export const useAppStore = defineStore("app", () => {
   const pdfRenderQuality = ref(0.72);
   const editorGotoLine = ref<number | null>(null);
   const markdownPreviewLine = ref<number | null>(null);
+  const editorCursorLine = ref<number | null>(null);
   const annotations = ref<PaperAnnotation[]>([]);
   const activeAnnotationId = ref<string>();
+  const latexIndex = ref<ProjectLatexIndex>(emptyLatexIndex());
+  const activeBibPreviewKey = ref<string>();
 
   function currentAnnotationAuthor() {
-    return commentAuthorName.value.trim() || workspace.value?.owner?.trim() || "我";
+    return (
+      commentAuthorName.value.trim() || workspace.value?.owner?.trim() || "我"
+    );
   }
 
   async function setCommentAuthorName(value: string) {
@@ -706,6 +739,21 @@ export const useAppStore = defineStore("app", () => {
   const isMarkdownActive = computed(
     () => activeDocument.value?.kind === "markdown",
   );
+  const activeBibPreview = computed<BibEntryItem | undefined>(() =>
+    activeBibPreviewKey.value
+      ? latexIndex.value.citations.find(
+          (item) => item.key === activeBibPreviewKey.value,
+        )
+      : undefined,
+  );
+
+  const activeDocumentDiagnostics = computed(() => {
+    const doc = activeDocument.value;
+    const displayPath = displayPathFromRelative(doc?.relativePath);
+    if (!displayPath || !['latex', 'markdown'].includes(doc?.kind || '')) return [];
+    const normalized = normalizePath(displayPath);
+    return latexIndex.value.diagnostics.filter((item) => normalizePath(item.file) === normalized);
+  });
 
   function applyLayoutForDocumentKind(kind?: DocumentKind) {
     if (!kind) return;
@@ -871,7 +919,8 @@ export const useAppStore = defineStore("app", () => {
         : documents.value[0]?.id;
       fileTree.value = [];
       workspace.value = initial.workspace;
-      commentAuthorName.value = initial.commentAuthorName || initial.workspace?.owner || "";
+      commentAuthorName.value =
+        initial.commentAuthorName || initial.workspace?.owner || "";
       if (!commentAuthorName.value.trim()) {
         try {
           commentAuthorName.value = (await currentSystemUsername()) || "";
@@ -928,7 +977,10 @@ export const useAppStore = defineStore("app", () => {
       busy.value = true;
       error.value = "";
       try {
-        const normalized = { ...normalizeWorkspace(nextWorkspace), source: "github" as const };
+        const normalized = {
+          ...normalizeWorkspace(nextWorkspace),
+          source: "github" as const,
+        };
         if (normalized.owner) commentAuthorName.value = normalized.owner;
         status.value = "正在后台获取/更新仓库，界面仍可继续操作…";
         const output = await cloneOrUpdateRepository(
@@ -1039,7 +1091,10 @@ export const useAppStore = defineStore("app", () => {
     if (!workspace.value?.localDir) return;
     return runExclusive("workspace-refresh", "刷新工作区", async () => {
       await loadAnnotations();
-      if (workspace.value?.source === "local" && workspace.value.localOpenKind === "file") {
+      if (
+        workspace.value?.source === "local" &&
+        workspace.value.localOpenKind === "file"
+      ) {
         const name = workspace.value.localFileName;
         fileTree.value = name ? [singleFileNodeFromName(name)] : [];
       } else {
@@ -1054,7 +1109,31 @@ export const useAppStore = defineStore("app", () => {
       )
         selectedNodePath.value = undefined;
       await refreshGitStatus();
+      await refreshLatexIndex();
       await persist();
+    });
+  }
+
+  async function refreshLatexIndex() {
+    if (!workspace.value?.localDir) {
+      latexIndex.value = emptyLatexIndex();
+      return;
+    }
+    const activeTextByPath = new Map<string, string>();
+    for (const doc of documents.value) {
+      const display = displayPathFromRelative(doc.relativePath);
+      if (display && ["latex", "bibtex", "markdown"].includes(doc.kind)) {
+        activeTextByPath.set(display, doc.text);
+      }
+    }
+    latexIndex.value = await buildProjectLatexIndex({
+      fileTree: fileTree.value,
+      activeTextByPath,
+      readFile: async (displayPath: string) =>
+        readWorkspaceFile(
+          workspace.value!.localDir,
+          makeRelativePath(displayPath),
+        ),
     });
   }
 
@@ -1074,8 +1153,13 @@ export const useAppStore = defineStore("app", () => {
 
   function setActiveDocument(id: string) {
     activeDocumentId.value = id;
+    editorCursorLine.value = 1;
     applyLayoutForDocumentKind(activeDocument.value?.kind);
     persist().catch(() => undefined);
+  }
+
+  function setEditorCursorLine(line?: number | null) {
+    editorCursorLine.value = line || null;
   }
 
   function updateActiveText(text: string) {
@@ -1265,6 +1349,9 @@ export const useAppStore = defineStore("app", () => {
           node.documentKind === "image"
             ? `已预览图片：${relativePath}`
             : `已打开：${relativePath}`;
+      }
+      if (["latex", "bibtex"].includes(node.documentKind)) {
+        await refreshLatexIndex();
       }
       await persist();
     } catch (err) {
@@ -1500,7 +1587,9 @@ export const useAppStore = defineStore("app", () => {
       if (!workspace.value?.localDir)
         throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
       if (workspace.value.source === "local")
-        throw new Error("当前是本地工作区，不需要 GitHub 提交；请直接保存文件，批注会写入本地 .paper-notes。");
+        throw new Error(
+          "当前是本地工作区，不需要 GitHub 提交；请直接保存文件，批注会写入本地 .paper-notes。",
+        );
       if (!githubToken.value)
         throw new Error("请先粘贴 GitHub Token 并点击“保存凭据”。");
       const defaultMessage =
@@ -1582,6 +1671,45 @@ export const useAppStore = defineStore("app", () => {
         status.value = result.ok
           ? `LaTeX 构建成功：${result.pdfPath}`
           : "LaTeX 构建失败，请查看日志。";
+        if (result.ok && result.pdfPath) {
+          await loadPdfPreview(result.pdfPath, true);
+        }
+      } catch (err) {
+        error.value = err instanceof Error ? err.message : String(err);
+        throw err;
+      }
+    });
+  }
+
+  async function buildMarkdownPandoc() {
+    return runExclusive("markdown-pandoc-build", "Markdown PDF 构建", async () => {
+      const doc = activeDocument.value;
+      if (
+        !doc ||
+        doc.kind !== "markdown" ||
+        !doc.relativePath ||
+        !workspace.value?.localDir
+      ) {
+        throw new Error("当前文件不是工作区内的 Markdown 文件。");
+      }
+      await saveActiveLocal();
+      error.value = "";
+      try {
+        const buildForDocumentId = doc.id;
+        status.value = "Pandoc 正在后台将 Markdown 构建为 PDF…";
+        const result = await buildMarkdownPandocFile(
+          workspace.value.localDir,
+          doc.relativePath,
+        );
+        if (activeDocumentId.value !== buildForDocumentId) {
+          latexResult.value = result;
+          status.value = "Markdown PDF 构建完成，但当前已切换到其他文件。";
+          return;
+        }
+        latexResult.value = result;
+        status.value = result.ok
+          ? `Markdown PDF 构建成功：${result.pdfPath}`
+          : "Markdown PDF 构建失败，请查看日志。";
         if (result.ok && result.pdfPath) {
           await loadPdfPreview(result.pdfPath, true);
         }
@@ -1674,7 +1802,6 @@ export const useAppStore = defineStore("app", () => {
     status.value = `已定位到 ${relativePath}:${line}`;
     await persist();
   }
-
 
   function setEditorGotoLine(line: number) {
     const safeLine = Math.max(1, line);
@@ -1778,7 +1905,13 @@ export const useAppStore = defineStore("app", () => {
       type: isHighlight ? "highlight" : isArea ? "area" : "text",
       status: "open",
       body: payload.body,
-      messages: [makeAnnotationMessage(payload.body, timestamp, currentAnnotationAuthor())],
+      messages: [
+        makeAnnotationMessage(
+          payload.body,
+          timestamp,
+          currentAnnotationAuthor(),
+        ),
+      ],
       tags: [],
       documentPath: doc?.relativePath,
       selectedText: payload.textQuote,
@@ -1878,7 +2011,13 @@ export const useAppStore = defineStore("app", () => {
       type: "text",
       status: "open",
       body: payload.body,
-      messages: [makeAnnotationMessage(payload.body, timestamp, currentAnnotationAuthor())],
+      messages: [
+        makeAnnotationMessage(
+          payload.body,
+          timestamp,
+          currentAnnotationAuthor(),
+        ),
+      ],
       tags: [],
       documentPath: doc.relativePath,
       selectedText,
@@ -1956,7 +2095,9 @@ export const useAppStore = defineStore("app", () => {
       type: "comment",
       status: "open",
       body,
-      messages: [makeAnnotationMessage(body, timestamp, currentAnnotationAuthor())],
+      messages: [
+        makeAnnotationMessage(body, timestamp, currentAnnotationAuthor()),
+      ],
       tags: [],
       documentPath: doc.relativePath,
       selectedText,
@@ -2043,7 +2184,12 @@ export const useAppStore = defineStore("app", () => {
     const firstMessage = existingMessages[0];
     item.messages = [
       ...existingMessages,
-      makeAnnotationMessage(body, timestamp, currentAnnotationAuthor(), firstMessage),
+      makeAnnotationMessage(
+        body,
+        timestamp,
+        currentAnnotationAuthor(),
+        firstMessage,
+      ),
     ];
     item.updatedAt = timestamp;
     item.body = item.messages[0]?.body || item.body || "";
@@ -2083,13 +2229,14 @@ export const useAppStore = defineStore("app", () => {
     if (!currentItems.length) {
       throw new Error("当前文件没有可导出的批注。");
     }
-    const baseName = (doc?.relativePath || doc?.title || "annotations")
-      .replace(/\.[^/.]+$/, "")
-      .split(/[\/]/)
-      .filter(Boolean)
-      .join("-")
-      .replace(/[<>:"/\\|?*]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "annotations";
+    const baseName =
+      (doc?.relativePath || doc?.title || "annotations")
+        .replace(/\.[^/.]+$/, "")
+        .split(/[\/]/)
+        .filter(Boolean)
+        .join("-")
+        .replace(/[<>:"/\\|?*]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "annotations";
     const title = `${doc?.relativePath || doc?.title || "当前文件"} 批注`;
     const savedPath = await saveTextFileWithDialog({
       defaultDir: `${workspace.value.localDir.replace(/[\/]$/, "")}/.paper-notes`,
@@ -2129,7 +2276,10 @@ export const useAppStore = defineStore("app", () => {
         annotation.texAnchor.file,
         annotation.texAnchor.line,
       );
-      if (annotation.markdownAnchor || annotation.texAnchor.file.toLowerCase().endsWith(".md")) {
+      if (
+        annotation.markdownAnchor ||
+        annotation.texAnchor.file.toLowerCase().endsWith(".md")
+      ) {
         setMarkdownPreviewLine(annotation.texAnchor.line);
       }
     }
@@ -2174,6 +2324,54 @@ export const useAppStore = defineStore("app", () => {
     }
 
     activeAnnotationId.value = annotation.id;
+  }
+
+  function setActiveBibPreviewKey(key?: string) {
+    activeBibPreviewKey.value = key || undefined;
+  }
+
+  async function openLatexOutlineItem(item: LatexOutlineItem) {
+    await openWorkspacePathAtLine(makeRelativePath(item.file), item.line);
+    if (activeDocument.value?.kind === "latex") {
+      try {
+        await syncTexForwardFromEditor(item.line, 1);
+      } catch {
+        // 大纲跳转不要求一定有已构建 PDF。
+      }
+    }
+  }
+
+  async function openLatexIndexedPath(displayPath: string) {
+    if (!workspace.value?.localDir) return;
+    const sourceFile = activeDocument.value?.relativePath ? displayPathFromRelative(activeDocument.value.relativePath) : undefined;
+    const path = resolveIndexedFilePath(displayPath, latexIndex.value, sourceFile);
+    const node = findNodeByPath(fileTree.value, path) || {
+      name: titleFromPath(path),
+      path,
+      kind: "file" as const,
+      documentKind: kindFromPath(path),
+      children: [],
+    };
+    await openWorkspaceFile(node);
+  }
+
+  async function jumpToLatexLabel(key: string) {
+    const label = latexIndex.value.labels.find((item) => item.key === key);
+    if (!label) {
+      status.value = `未找到 label：${key}`;
+      return;
+    }
+    await openWorkspacePathAtLine(makeRelativePath(label.file), label.line);
+  }
+
+  async function jumpToBibEntry(key: string) {
+    const entry = latexIndex.value.citations.find((item) => item.key === key);
+    if (!entry) {
+      status.value = `未找到 BibTeX 条目：${key}`;
+      return;
+    }
+    activeBibPreviewKey.value = key;
+    await openWorkspacePathAtLine(makeRelativePath(entry.file), entry.line);
   }
 
   async function setPdfRenderQuality(value: number) {
@@ -2226,8 +2424,13 @@ export const useAppStore = defineStore("app", () => {
     pdfRenderQuality,
     editorGotoLine,
     markdownPreviewLine,
+    editorCursorLine,
     annotations,
     activeAnnotationId,
+    latexIndex,
+    activeBibPreviewKey,
+    activeBibPreview,
+    activeDocumentDiagnostics,
     visibleAnnotations,
     visiblePdfAnnotations,
     visibleSourceAnnotations,
@@ -2246,7 +2449,9 @@ export const useAppStore = defineStore("app", () => {
     openLocalFile,
     refreshWorkspace,
     refreshGitStatus,
+    refreshLatexIndex,
     setActiveDocument,
+    setEditorCursorLine,
     selectNode,
     updateActiveText,
     openWorkspaceFile,
@@ -2259,6 +2464,7 @@ export const useAppStore = defineStore("app", () => {
     removeItem,
     submitGithub,
     buildLatex,
+    buildMarkdownPandoc,
     cleanLatex,
     openCurrentPdf,
     loadPdfPreview,
@@ -2276,6 +2482,11 @@ export const useAppStore = defineStore("app", () => {
     syncMarkdownEditorFromPreview,
     syncTexForwardFromEditor,
     syncTexReverseFromPdf,
+    setActiveBibPreviewKey,
+    openLatexOutlineItem,
+    openLatexIndexedPath,
+    jumpToLatexLabel,
+    jumpToBibEntry,
     closeDocument,
   };
 });

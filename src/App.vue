@@ -3,11 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import Explorer from "./components/Explorer.vue";
 import GitPanel from "./components/GitPanel.vue";
+import EditorOutlinePanel from "./components/EditorOutlinePanel.vue";
 import MarkdownEditor from "./components/MarkdownEditor.vue";
 import MarkdownPreview from "./components/MarkdownPreview.vue";
 import PdfPreview from "./components/PdfPreview.vue";
 import AnnotationSidebar from "./components/AnnotationSidebar.vue";
 import Toolbar from "./components/Toolbar.vue";
+import BibPreviewPopover from "./components/BibPreviewPopover.vue";
 import { useAppStore } from "./stores/appStore";
 import type { FileNode, PaperAnnotationRect } from "./types/app";
 
@@ -35,6 +37,7 @@ const {
   pdfSyncPoint,
   pdfRenderQuality,
   editorGotoLine,
+  editorCursorLine,
   markdownPreviewLine,
   activeAnnotationId,
   visibleAnnotations,
@@ -43,6 +46,9 @@ const {
   status,
   workspace,
   commentAuthorName,
+  latexIndex,
+  activeBibPreview,
+  activeDocumentDiagnostics,
 } = storeToRefs(store);
 
 const activeText = computed({
@@ -70,15 +76,36 @@ const annotationPanelAvailable = computed(() =>
   ["markdown", "latex", "pdf"].includes(activeKind.value || ""),
 );
 const pdfPreviewActive = computed(() =>
-  activeKind.value === "pdf" || (activeKind.value === "latex" && !!pdfPreviewUrl.value),
+  activeKind.value === "pdf" ||
+  (activeKind.value === "latex" && !!pdfPreviewUrl.value) ||
+  (activeKind.value === "markdown" && markdownPdfPreviewMode.value && !!pdfPreviewUrl.value),
 );
+const editorOutlineAvailable = computed(() =>
+  activeKind.value === "latex" || activeKind.value === "markdown",
+);
+function normalizeDisplayPath(path?: string) {
+  return (path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+const activeFileOutlineCount = computed(() => {
+  if (!editorOutlineAvailable.value || !activeDocument.value?.relativePath) return 0;
+  const activePath = normalizeDisplayPath(activeDocument.value.relativePath);
+  return latexIndex.value.outline.filter((item) => {
+    const itemPath = normalizeDisplayPath(item.file);
+    return itemPath === activePath || itemPath.endsWith(`/${activePath}`) || activePath.endsWith(`/${itemPath}`);
+  }).length;
+});
+
+const activeDiagnosticCount = computed(() => activeDocumentDiagnostics.value.length);
+const activeDiagnosticErrorCount = computed(() => activeDocumentDiagnostics.value.filter((item) => item.severity === 'error').length);
 
 const explorerWidth = ref(280);
 const settingsWidth = ref(360);
 const previewWidth = ref(560);
 const imageZoom = ref(1);
-const annotationPanelVisible = ref(true);
+const markdownPdfPreviewMode = ref(false);
+const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
+const editorOutlineVisible = ref(false);
 let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | null =
   null;
 let annotationResizeRight = 0;
@@ -133,6 +160,9 @@ watch(
   () => activeDocument.value?.relativePath,
   () => {
     imageZoom.value = 1;
+    markdownPdfPreviewMode.value = false;
+    annotationPanelVisible.value = false;
+    editorOutlineVisible.value = false;
   },
 );
 
@@ -276,13 +306,20 @@ async function moveItem(payload: { source: FileNode; target?: FileNode }) {
   }
 }
 
-async function buildLatex() {
+async function buildActiveDocument() {
   try {
+    if (activeDocument.value?.kind === "markdown") {
+      await store.buildMarkdownPandoc();
+      if (pdfPreviewUrl.value) markdownPdfPreviewMode.value = true;
+      return;
+    }
     await store.buildLatex();
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
 }
+
+const buildLatex = buildActiveDocument;
 
 async function syncTexForward(payload: { line: number; column: number }) {
   try {
@@ -338,6 +375,16 @@ async function createMarkdownPreviewAnnotation(payload: {
   }
 }
 
+async function handleLatexNavigate(payload: { kind: 'label' | 'bib' | 'file'; key: string }) {
+  try {
+    if (payload.kind === 'label') await store.jumpToLatexLabel(payload.key);
+    else if (payload.kind === 'bib') await store.jumpToBibEntry(payload.key);
+    else await store.openLatexIndexedPath(payload.key);
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 function onKeydown(event: KeyboardEvent) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
@@ -346,7 +393,7 @@ function onKeydown(event: KeyboardEvent) {
   if (
     (event.metaKey || event.ctrlKey) &&
     event.key.toLowerCase() === "b" &&
-    isLatexActive.value
+    ["latex", "markdown"].includes(activeDocument.value?.kind || "")
   ) {
     event.preventDefault();
     buildLatex();
@@ -414,16 +461,70 @@ onBeforeUnmount(() => {
         :style="editorLayoutStyle"
       >
         <div v-if="editorAreaVisible" class="editor-column">
-          <MarkdownEditor
-            v-model="activeText"
-            :dark-mode="darkMode"
-            :kind="activeDocument?.kind"
-            :goto-line="editorGotoLine"
-            @save="saveLocal"
-            @build="buildLatex"
-            @source-dblclick="syncTexForward"
-            @markdown-source-click="syncMarkdownPreview"
-          />
+          <div class="editor-header">
+            <div class="editor-header-left">
+              <button
+                v-if="editorOutlineAvailable"
+                class="toolbar-icon outline-toggle-button"
+                :class="{ active: editorOutlineVisible }"
+                :title="editorOutlineVisible ? '隐藏大纲' : '显示当前文件大纲'"
+                @click="editorOutlineVisible = !editorOutlineVisible"
+              >
+                ☷<small v-if="activeFileOutlineCount">{{ activeFileOutlineCount }}</small>
+              </button>
+              <div class="editor-title">
+                <span>编辑</span>
+                <small>{{ activeDocument?.relativePath || activeDocument?.title || '未打开文档' }}</small>
+              </div>
+            </div>
+            <div class="editor-header-actions">
+              <span
+                v-if="activeDiagnosticCount"
+                class="editor-diagnostic-pill"
+                :class="{ error: activeDiagnosticErrorCount }"
+                :title="`${activeDiagnosticErrorCount} 个错误，${activeDiagnosticCount - activeDiagnosticErrorCount} 个警告`"
+              >
+                {{ activeDiagnosticErrorCount ? '●' : '▲' }} {{ activeDiagnosticCount }}
+              </span>
+            </div>
+          </div>
+          <div
+            class="editor-body-layout"
+            :class="{ 'outline-visible': editorOutlineAvailable && editorOutlineVisible }"
+          >
+            <EditorOutlinePanel
+              v-if="editorOutlineAvailable && editorOutlineVisible"
+              :outline="latexIndex.outline"
+              :active="activeDocument"
+              :active-line="editorCursorLine"
+              @open="store.openLatexOutlineItem"
+              @close="editorOutlineVisible = false"
+            />
+            <div class="editor-code-pane">
+              <MarkdownEditor
+                v-model="activeText"
+                :dark-mode="darkMode"
+                :kind="activeDocument?.kind"
+                :goto-line="editorGotoLine"
+                :latex-index="latexIndex"
+                :diagnostics="activeDocumentDiagnostics"
+                :root-dir="workspace?.localDir"
+                :current-path="activeDocument?.relativePath"
+                @save="saveLocal"
+                @build="buildLatex"
+                @source-dblclick="syncTexForward"
+                @markdown-source-click="syncMarkdownPreview"
+                @latex-navigate="handleLatexNavigate"
+                @bib-preview="store.setActiveBibPreviewKey"
+                @cursor-line="store.setEditorCursorLine"
+              />
+              <BibPreviewPopover
+                :entry="activeBibPreview"
+                @open="store.jumpToBibEntry"
+                @close="store.setActiveBibPreviewKey(undefined)"
+              />
+            </div>
+          </div>
         </div>
         <div
           v-if="splitLayoutActive"
@@ -434,20 +535,36 @@ onBeforeUnmount(() => {
         <div v-if="effectivePreviewVisible" class="preview-column">
           <div v-if="!pdfPreviewActive" class="preview-header">
             <span>预览</span>
-            <button
-              v-if="annotationPanelAvailable"
-              class="toolbar-icon"
-              :class="{ active: annotationPanelVisible }"
-              :title="
-                annotationPanelVisible ? '隐藏批注' : '显示批注'
-              "
-              @click="annotationPanelVisible = !annotationPanelVisible"
-            >
-              {{ annotationPanelVisible ? '▥' : '▤' }}
-            </button>
+            <div class="preview-header-actions">
+              <button
+                v-if="activeDocument?.kind === 'markdown'"
+                class="toolbar-icon"
+                title="使用 Pandoc 构建 Markdown PDF（Ctrl/⌘+B）"
+                @click="buildActiveDocument"
+              >
+                ⎙
+              </button>
+              <button
+                v-if="activeDocument?.kind === 'markdown' && pdfPreviewUrl"
+                class="toolbar-icon"
+                title="查看 Pandoc 生成的 PDF"
+                @click="markdownPdfPreviewMode = true"
+              >
+                PDF
+              </button>
+              <button
+                v-if="annotationPanelAvailable"
+                class="toolbar-icon"
+                :class="{ active: annotationPanelVisible }"
+                :title="annotationPanelVisible ? '隐藏批注' : '显示批注'"
+                @click="annotationPanelVisible = !annotationPanelVisible"
+              >
+                {{ annotationPanelVisible ? '▥' : '▤' }}
+              </button>
+            </div>
           </div>
           <div
-            v-if="activeDocument?.kind === 'markdown'"
+            v-if="activeDocument?.kind === 'markdown' && !markdownPdfPreviewMode"
             class="paper-review-layout markdown-review-layout"
             :class="{ 'annotation-hidden': !annotationPanelVisible }"
             :style="paperReviewLayoutStyle"
@@ -464,6 +581,51 @@ onBeforeUnmount(() => {
                 @create-annotation="createMarkdownPreviewAnnotation"
                 @focus-annotation="store.focusAnnotation"
                 @source-click="syncMarkdownEditor"
+              />
+            </div>
+            <div
+              v-if="annotationPanelVisible"
+              class="resize-handle vertical annotation-resize"
+              title="拖动调整批注栏宽度"
+              @mousedown="startResize('annotation', $event)"
+            />
+            <AnnotationSidebar
+              v-if="annotationPanelVisible"
+              :annotations="visibleAnnotations"
+              :active-id="activeAnnotationId"
+              :latex-active="isLatexActive"
+              :active-path="activeDocument?.relativePath"
+              @jump="store.focusAnnotation"
+              @status="store.updateAnnotationStatus"
+              @reply="store.addAnnotationReply"
+              @edit-message="store.updateAnnotationMessage"
+              @export-markdown="store.exportAnnotationsMarkdown"
+              @remove="store.removeAnnotation"
+            />
+          </div>
+
+          <div
+            v-else-if="activeDocument?.kind === 'markdown' && markdownPdfPreviewMode && pdfPreviewUrl"
+            class="paper-review-layout"
+            :class="{ 'annotation-hidden': !annotationPanelVisible }"
+            :style="paperReviewLayoutStyle"
+          >
+            <div class="markdown-pdf-preview-shell">
+              <div class="markdown-pdf-return-bar">
+                <button class="toolbar-icon" title="返回 Markdown 预览" @click="markdownPdfPreviewMode = false">MD</button>
+                <span>Pandoc PDF</span>
+              </div>
+              <PdfPreview
+                :data-url="pdfPreviewUrl"
+                :sync-point="pdfSyncPoint"
+                :render-quality="pdfRenderQuality"
+                :annotations="visiblePdfAnnotations"
+                :active-annotation-id="activeAnnotationId"
+                :annotation-panel-visible="annotationPanelVisible"
+                :annotation-panel-available="annotationPanelAvailable"
+                @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
+                @create-annotation="createPdfAnnotation"
+                @focus-annotation="store.focusAnnotation"
               />
             </div>
             <div

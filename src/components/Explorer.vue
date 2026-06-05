@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineComponent, h, ref } from 'vue';
+import { computed, defineComponent, h, ref } from 'vue';
 import type { PropType } from 'vue';
 import type { FileNode, MarkdownDocument } from '../types/app';
 
@@ -17,7 +17,7 @@ const emit = defineEmits<{
   rename: [node?: FileNode];
   delete: [node: FileNode];
   refresh: [];
-  openLocal: [kind: "folder" | "file"];
+  openLocal: [kind: 'folder' | 'file'];
   hide: [];
   select: [node?: FileNode];
   move: [payload: { source: FileNode; target?: FileNode }];
@@ -48,6 +48,13 @@ function dropOnNode(target: FileNode) {
   draggedNode.value = null;
   rootDragOver.value = false;
 }
+
+function displayPath(path?: string) {
+  return (path || '').replace(/^\/+/, '').replace(/\\/g, '/');
+}
+
+const activeDisplayPath = computed(() => displayPath(props.active?.relativePath));
+
 
 const TreeNode: any = defineComponent({
   name: 'TreeNode',
@@ -93,10 +100,6 @@ const TreeNode: any = defineComponent({
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
     };
 
-    const onDragLeave = () => {
-      dragOver.value = false;
-    };
-
     const onDrop = (event: DragEvent) => {
       if (!componentProps.draggedPath) return;
       event.preventDefault();
@@ -108,90 +111,49 @@ const TreeNode: any = defineComponent({
     const stop = (event: MouseEvent) => event.stopPropagation();
 
     return (): any => h('li', [
-      h(
-        'div',
-        {
-          class: {
-            'tree-row': true,
-            active: componentProps.node.kind === 'file' && !!componentProps.activePath && componentProps.activePath.endsWith(componentProps.node.path),
-            selected: componentProps.selectedPath === componentProps.node.path,
-            folder: componentProps.node.kind === 'folder',
-            dragging: componentProps.draggedPath === componentProps.node.path,
-            'drag-over': dragOver.value,
-          },
-          draggable: true,
-          onClick,
-          onDragstart: onDragStart,
-          onDragend: () => componentEmit('dragend-node'),
-          onDragover: onDragOver,
-          onDragleave: onDragLeave,
-          onDrop,
+      h('div', {
+        class: {
+          'tree-row': true,
+          active: componentProps.node.kind === 'file' && !!componentProps.activePath && componentProps.activePath.endsWith(componentProps.node.path),
+          selected: componentProps.selectedPath === componentProps.node.path,
+          folder: componentProps.node.kind === 'folder',
+          dragging: componentProps.draggedPath === componentProps.node.path,
+          'drag-over': dragOver.value,
         },
-        [
-          h('span', { class: 'tree-icon' }, icon()),
-          h('span', { class: 'tree-name', title: componentProps.node.path }, componentProps.node.name),
-          h('span', { class: 'tree-actions' }, [
-            componentProps.node.kind === 'folder'
-              ? h(
-                  'button',
-                  {
-                    class: 'tree-action',
-                    title: '在此文件夹中新建',
-                    onClick: (event: MouseEvent) => {
-                      stop(event);
-                      componentEmit('create', componentProps.node);
-                    },
-                  },
-                  '＋',
-                )
-              : null,
-            h(
-              'button',
-              {
-                class: 'tree-action',
-                title: '重命名',
-                onClick: (event: MouseEvent) => {
-                  stop(event);
-                  componentEmit('rename', componentProps.node);
-                },
-              },
-              '✎',
-            ),
-            h(
-              'button',
-              {
-                class: 'tree-action danger',
-                title: '删除',
-                onClick: (event: MouseEvent) => {
-                  stop(event);
-                  componentEmit('delete', componentProps.node);
-                },
-              },
-              '×',
-            ),
-          ]),
-        ],
-      ),
+        draggable: true,
+        onClick,
+        onDragstart: onDragStart,
+        onDragend: () => componentEmit('dragend-node'),
+        onDragover: onDragOver,
+        onDragleave: () => { dragOver.value = false; },
+        onDrop,
+      }, [
+        h('span', { class: 'tree-icon' }, icon()),
+        h('span', { class: 'tree-name', title: componentProps.node.path }, componentProps.node.name),
+        h('span', { class: 'tree-actions' }, [
+          componentProps.node.kind === 'folder'
+            ? h('button', { class: 'tree-action', title: '在此文件夹中新建', onClick: (event: MouseEvent) => { stop(event); componentEmit('create', componentProps.node); } }, '＋')
+            : null,
+          h('button', { class: 'tree-action', title: '重命名', onClick: (event: MouseEvent) => { stop(event); componentEmit('rename', componentProps.node); } }, '✎'),
+          h('button', { class: 'tree-action danger', title: '删除', onClick: (event: MouseEvent) => { stop(event); componentEmit('delete', componentProps.node); } }, '×'),
+        ]),
+      ]),
       componentProps.node.kind === 'folder' && expanded.value
-        ? h(
-            'ul',
-            { class: 'tree-children' },
-            componentProps.node.children.map((child) => h(TreeNode, {
-              key: child.path,
-              node: child,
-              activePath: componentProps.activePath,
-              selectedPath: componentProps.selectedPath,
-              draggedPath: componentProps.draggedPath,
-              onOpen: (node: FileNode) => componentEmit('open', node),
-              onCreate: (node: FileNode) => componentEmit('create', node),
-              onRename: (node: FileNode) => componentEmit('rename', node),
-              onDelete: (node: FileNode) => componentEmit('delete', node),
-              onSelect: (node?: FileNode) => componentEmit('select', node),
-              onDragstartNode: (node: FileNode) => componentEmit('dragstart-node', node),
-              onDragendNode: () => componentEmit('dragend-node'),
-              onDropNode: (node: FileNode) => componentEmit('drop-node', node),
-            })),
-          )
+        ? h('ul', { class: 'tree-children' }, componentProps.node.children.map((child) => h(TreeNode, {
+          key: child.path,
+          node: child,
+          activePath: componentProps.activePath,
+          selectedPath: componentProps.selectedPath,
+          draggedPath: componentProps.draggedPath,
+          onOpen: (node: FileNode) => componentEmit('open', node),
+          onCreate: (node: FileNode) => componentEmit('create', node),
+          onRename: (node: FileNode) => componentEmit('rename', node),
+          onDelete: (node: FileNode) => componentEmit('delete', node),
+          onSelect: (node?: FileNode) => componentEmit('select', node),
+          onDragstartNode: (node: FileNode) => componentEmit('dragstart-node', node),
+          onDragendNode: () => componentEmit('dragend-node'),
+          onDropNode: (node: FileNode) => componentEmit('drop-node', node),
+        })))
         : null,
     ]);
   },
@@ -203,7 +165,7 @@ const TreeNode: any = defineComponent({
     <div class="sidebar-header">
       <div>
         <strong>文档</strong>
-        <small>{{ props.dirtyCount ? `${props.dirtyCount} 个未保存` : '本地工作区目录树' }}</small>
+        <small>{{ props.dirtyCount ? `${props.dirtyCount} 个未保存` : '项目文件与结构' }}</small>
       </div>
       <div class="sidebar-header-actions">
         <div class="open-local-menu-wrap">
@@ -214,25 +176,12 @@ const TreeNode: any = defineComponent({
           </div>
         </div>
         <button class="icon-button" title="在当前选中目录中新建；未选中时在根目录新建" @click="createFromSelection">＋</button>
-        <button class="icon-button" title="刷新目录树" @click="emit('refresh')">↻</button>
+        <button class="icon-button" title="刷新目录树和大纲索引" @click="emit('refresh')">↻</button>
         <button class="icon-button" title="隐藏文档树" @click="emit('hide')">☰</button>
       </div>
     </div>
 
-    <div class="explorer-help">
-      <span>
-        <strong>📂</strong> 打开本地文档；<strong>＋</strong> 新建；<strong>✎</strong> 重命名。文件夹默认折叠，点击展开。
-      </span>
-    </div>
-
-    <div
-      class="tree-drop-root"
-      :class="{ 'drag-over': rootDragOver }"
-      @click="clearSelection"
-      @dragover.prevent="rootDragOver = !!draggedNode"
-      @dragleave="rootDragOver = false"
-      @drop.prevent="dropToRoot"
-    >
+    <div class="tree-drop-root" :class="{ 'drag-over': rootDragOver }" @click="clearSelection" @dragover.prevent="rootDragOver = !!draggedNode" @dragleave="rootDragOver = false" @drop.prevent="dropToRoot">
       <div v-if="!props.tree.length" class="empty-state">
         当前没有打开文档。点击上方 📂 打开本地文件或文件夹，也可以在设置中获取/更新 GitHub 工作区。
       </div>

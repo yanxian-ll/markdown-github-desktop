@@ -1983,3 +1983,617 @@ button:disabled {
 .pdf-preview-pane {
   min-height: 100%;
 }
+
+/* v0.6.0: LaTeX writing intelligence. */
+.editor-column {
+  position: relative;
+}
+.outline-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 4px;
+  max-height: 34vh;
+  overflow: auto;
+}
+.outline-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 4px 4px;
+}
+.outline-title small {
+  color: var(--muted);
+  font-weight: 650;
+}
+.outline-item {
+  width: 100%;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+}
+.outline-item:hover {
+  border-color: var(--border);
+  background: rgba(96, 165, 250, 0.12);
+}
+.outline-kind {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+.bib-preview-popover {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 25;
+  width: min(360px, calc(100% - 28px));
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.26);
+}
+.bib-preview-kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+.bib-preview-close {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 8px;
+}
+.bib-preview-popover p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+.bib-preview-popover small {
+  color: var(--muted);
+}
+.bib-preview-popover code {
+  width: fit-content;
+  padding: 3px 6px;
+  border-radius: 7px;
+  background: rgba(127, 127, 127, 0.14);
+}
+.bib-preview-actions {
+  margin-top: 2px;
+}
+.cm-tooltip-autocomplete ul li .cm-completionDetail {
+  opacity: 0.78;
+}
+.light .bib-preview-popover {
+  background: #fff;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+}
+
+/* v0.6.2: project structure index, outline tabs and dependency graph. */
+.explorer-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.explorer-tabs button {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--muted);
+  font-weight: 750;
+  cursor: pointer;
+}
+.explorer-tabs button.active {
+  background: rgba(96, 165, 250, 0.16);
+  color: var(--text);
+  border-color: rgba(96, 165, 250, 0.45);
+}
+.explorer-tabs span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.enhanced-outline {
+  margin-top: 0;
+  padding: 10px;
+  border-top: 0;
+  max-height: none;
+  height: 100%;
+  align-content: start;
+}
+.outline-file-group {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.outline-file-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 4px 3px;
+}
+.outline-item.active {
+  border-color: rgba(96, 165, 250, 0.62);
+  background: rgba(96, 165, 250, 0.18);
+}
+.outline-toggle {
+  width: 16px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+}
+.outline-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dependency-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 4px;
+}
+.dependency-item {
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+.dependency-item:hover {
+  border-color: var(--border);
+  background: rgba(96, 165, 250, 0.12);
+}
+.dependency-item span:first-child {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+.dependency-item span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dependency-item.missing {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+.empty-state.compact {
+  min-height: auto;
+  padding: 12px;
+}
+
+/* v0.6.3: editor topbar and current-file outline panel. */
+.editor-column {
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
+  background: var(--panel);
+}
+.editor-header {
+  height: 38px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  min-width: 0;
+}
+.editor-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.editor-title span {
+  color: var(--text);
+  font-weight: 750;
+}
+.editor-title small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42vw;
+}
+.editor-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.editor-header-actions .toolbar-icon {
+  position: relative;
+  width: 32px;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 9px;
+  font-weight: 800;
+}
+.editor-header-actions .toolbar-icon small {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  min-width: 17px;
+  height: 17px;
+  line-height: 17px;
+  border-radius: 999px;
+  display: inline-block;
+  color: #fff;
+  background: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+}
+.editor-body-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.editor-body-layout.outline-visible {
+  grid-template-columns: minmax(260px, 1fr) minmax(220px, 280px);
+}
+.editor-code-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.editor-outline-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  display: grid;
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+.editor-outline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.editor-outline-header div {
+  min-width: 0;
+}
+.editor-outline-header strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+.editor-outline-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.editor-outline-tree,
+.editor-outline-children {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.editor-outline-tree {
+  overflow: auto;
+  min-height: 0;
+  padding: 6px 0 12px;
+}
+.editor-outline-row {
+  display: grid;
+  grid-template-columns: 22px 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  margin: 2px 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  border: 1px solid transparent;
+}
+.editor-outline-row:hover,
+.editor-outline-row.active {
+  background: var(--panel-2);
+}
+.editor-outline-row.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.editor-outline-toggle {
+  width: 20px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-grid;
+  place-items: center;
+}
+.editor-outline-toggle:hover {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--accent);
+}
+.editor-outline-kind {
+  justify-self: center;
+  width: 30px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+.editor-outline-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.editor-outline-line {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+@media (max-width: 1280px) {
+  .editor-body-layout.outline-visible {
+    grid-template-columns: minmax(220px, 1fr) minmax(200px, 240px);
+  }
+}
+
+/* v0.6.4: outline moves to the left side of the editor and diagnostics are visible inline. */
+.editor-body-layout.outline-visible {
+  grid-template-columns: minmax(210px, 260px) minmax(260px, 1fr);
+}
+.editor-outline-panel {
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+.editor-diagnostic-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  color: var(--warn);
+  background: rgba(250, 204, 21, 0.1);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+.editor-diagnostic-pill.error {
+  border-color: rgba(239, 68, 68, 0.35);
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+.cm-latex-diagnostic-line {
+  position: relative;
+  box-shadow: inset 3px 0 0 rgba(250, 204, 21, 0.85);
+  background: rgba(250, 204, 21, 0.055);
+}
+.cm-latex-diagnostic-line.error {
+  box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.9);
+  background: rgba(239, 68, 68, 0.06);
+}
+.cm-latex-diagnostic-line.warning {
+  box-shadow: inset 3px 0 0 rgba(250, 204, 21, 0.85);
+}
+@media (max-width: 1280px) {
+  .editor-body-layout.outline-visible {
+    grid-template-columns: minmax(190px, 230px) minmax(220px, 1fr);
+  }
+}
+
+/* v0.6.5: outline entry on editor-left, collapsed outline default, and LaTeX hover cards. */
+.editor-header-left {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.editor-header-left .toolbar-icon {
+  position: relative;
+  width: 32px;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 9px;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+.editor-header-left .toolbar-icon small {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  min-width: 17px;
+  height: 17px;
+  line-height: 17px;
+  border-radius: 999px;
+  display: inline-block;
+  color: #fff;
+  background: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+}
+.outline-toggle-button {
+  margin-left: -2px;
+}
+.cm-tooltip.cm-tooltip-hover {
+  border: 0;
+  background: transparent;
+  z-index: 120;
+}
+.cm-latex-hover-card {
+  max-width: 360px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cm-latex-hover-card strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+.cm-latex-hover-card p {
+  margin: 0;
+  color: var(--text);
+}
+.cm-latex-hover-card small {
+  color: var(--muted);
+}
+.cm-latex-hover-kicker {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cm-latex-image-preview {
+  max-width: 320px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.08);
+  overflow: hidden;
+}
+.cm-latex-image-preview img {
+  display: block;
+  max-width: 320px;
+  max-height: 220px;
+  object-fit: contain;
+  background: #fff;
+}
+
+/* v0.7 Markdown + LaTeX mixed writing blocks */
+.md-latex-block {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+  box-shadow: var(--shadow-sm);
+}
+
+.md-latex-block header,
+.md-latex-figure figcaption {
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.md-latex-block small,
+.md-latex-figure small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.md-latex-block pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-2) 92%, transparent);
+}
+
+.md-latex-figure {
+  text-align: center;
+}
+
+.md-latex-figure img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  margin: 0 auto 8px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+
+.md-latex-theorem {
+  border-left: 4px solid var(--accent);
+}
+
+.md-latex-algorithm {
+  border-left: 4px solid color-mix(in srgb, var(--accent) 65%, #f59e0b);
+}
+
+.markdown-pdf-preview-shell {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.markdown-pdf-return-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preview-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

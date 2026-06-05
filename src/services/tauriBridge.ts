@@ -170,6 +170,11 @@ export async function buildLatex(rootDir: string, relativePath: string): Promise
   return invoke<LatexBuildResult>('build_latex', { rootDir, relativePath });
 }
 
+export async function buildMarkdownPandoc(rootDir: string, relativePath: string): Promise<LatexBuildResult> {
+  if (!isTauriRuntime()) throw new Error('Markdown → PDF 需要在 Tauri 桌面环境中运行，并安装 Pandoc。');
+  return invoke<LatexBuildResult>('build_markdown_pandoc', { rootDir, relativePath });
+}
+
 export async function findLatexPdf(rootDir: string, relativePath: string): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   return invoke<string | null>('find_latex_pdf', { rootDir, relativePath });
