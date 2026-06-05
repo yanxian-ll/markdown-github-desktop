@@ -7,6 +7,7 @@ import {
   cleanLatex as cleanLatexFiles,
   cloneOrUpdateRepository,
   commitAndPush,
+  currentSystemUsername,
   createWorkspaceFile,
   createWorkspaceFolder,
   deleteSecret,
@@ -20,6 +21,8 @@ import {
   readWorkspaceAnnotations,
   readFileDataUrl,
   findLatexPdf,
+  pickLocalFile,
+  pickLocalFolder,
   renameWorkspaceItem,
   saveAppState,
   setSecret,
@@ -27,6 +30,7 @@ import {
   synctexReverse,
   writeWorkspaceAnnotations,
   writeWorkspaceFile,
+  saveTextFileWithDialog,
 } from "../services/tauriBridge";
 import type {
   DocumentKind,
@@ -36,6 +40,7 @@ import type {
   LatexBuildResult,
   MarkdownDocument,
   PaperAnnotation,
+  PaperAnnotationMessage,
   PaperAnnotationRect,
   PaperPdfAnchor,
   PaperAnnotationStatus,
@@ -87,6 +92,9 @@ function normalizePath(path: string): string {
 
 function normalizeWorkspace(workspace: GitWorkspace): GitWorkspace {
   return {
+    source: workspace.source || "github",
+    localOpenKind: workspace.localOpenKind,
+    localFileName: workspace.localFileName,
     owner: workspace.owner.trim(),
     repo: workspace.repo
       .trim()
@@ -97,6 +105,32 @@ function normalizeWorkspace(workspace: GitWorkspace): GitWorkspace {
     rootPath: normalizePath(workspace.rootPath || ""),
   };
 }
+
+function stripTrailingSeparators(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function baseNameOfPath(path: string): string {
+  const cleaned = stripTrailingSeparators(path.replace(/\\/g, "/"));
+  return cleaned.split("/").filter(Boolean).pop() || cleaned || "本地工作区";
+}
+
+function parentDirOfAbsolutePath(path: string): string {
+  const cleaned = stripTrailingSeparators(path.replace(/\\/g, "/"));
+  const index = cleaned.lastIndexOf("/");
+  return index > 0 ? cleaned.slice(0, index) : cleaned;
+}
+
+function singleFileNodeFromName(name: string): FileNode {
+  return {
+    name,
+    path: name,
+    kind: "file",
+    documentKind: kindFromPath(name),
+    children: [],
+  };
+}
+
 
 function defaultDocument(): MarkdownDocument {
   return {
@@ -157,6 +191,21 @@ function findNodeByPath(
   return undefined;
 }
 
+function findFirstFileNode(nodes: FileNode[]): FileNode | undefined {
+  const preferred = nodes.flatMap((node) =>
+    node.kind === "file" && ["markdown", "latex"].includes(node.documentKind)
+      ? [node]
+      : [],
+  )[0];
+  if (preferred) return preferred;
+  for (const node of nodes) {
+    if (node.kind === "file") return node;
+    const child = findFirstFileNode(node.children);
+    if (child) return child;
+  }
+  return undefined;
+}
+
 function parentPathOf(path: string): string {
   const normalized = normalizePath(path);
   const index = normalized.lastIndexOf("/");
@@ -179,6 +228,72 @@ function targetDirectoryFromNode(node?: FileNode): string {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function makeAnnotationMessage(
+  body: string,
+  createdAt = nowIso(),
+  author?: string,
+  replyTo?: PaperAnnotationMessage,
+): PaperAnnotationMessage {
+  return {
+    id: makeId("msg"),
+    body,
+    author,
+    replyToMessageId: replyTo?.id,
+    replyToAuthor: replyTo?.author,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function threadMessages(item: PaperAnnotation): PaperAnnotationMessage[] {
+  const createdAt = item.createdAt || nowIso();
+  const messages = Array.isArray(item.messages)
+    ? item.messages
+        .filter((message) => typeof message?.body === "string")
+        .map((message) => ({
+          id: message.id || makeId("msg"),
+          body: message.body,
+          author: message.author,
+          replyToMessageId: message.replyToMessageId,
+          replyToAuthor: message.replyToAuthor,
+          createdAt: message.createdAt || createdAt,
+          updatedAt: message.updatedAt || message.createdAt || createdAt,
+        }))
+    : [];
+  if (!messages.length && item.body) {
+    messages.push({
+      id: `${item.id}-msg-1`,
+      body: item.body,
+      author: undefined,
+      replyToMessageId: undefined,
+      replyToAuthor: undefined,
+      createdAt,
+      updatedAt: item.updatedAt || createdAt,
+    });
+  }
+  return messages;
+}
+
+function normalizeAnnotationThread(item: PaperAnnotation): PaperAnnotation {
+  const messages = threadMessages(item);
+  const body = messages[0]?.body || item.body || "";
+  return {
+    ...item,
+    body,
+    messages,
+  };
+}
+
+function annotationCommentText(item: PaperAnnotation) {
+  const messages = threadMessages(item);
+  if (!messages.length) return item.body || "";
+  return messages
+    .map((message, index) =>
+      messages.length === 1 ? message.body : `${index + 1}. ${message.body}`,
+    )
+    .join("\n");
 }
 
 function normalizeAnnotationRect(
@@ -248,7 +363,7 @@ function parseAnnotationsJsonl(content: string): PaperAnnotation[] {
         const item = JSON.parse(line) as PaperAnnotation;
         if (!item.id || !item.createdAt || !item.updatedAt) return [];
         return [
-          {
+          normalizeAnnotationThread({
             ...item,
             status: item.status || "open",
             tags: Array.isArray(item.tags) ? item.tags : [],
@@ -267,7 +382,7 @@ function parseAnnotationsJsonl(content: string): PaperAnnotation[] {
                   : "unknown"),
             needsReview:
               item.needsReview ?? (!item.texAnchor && item.type === "area"),
-          },
+          }),
         ];
       } catch {
         return [];
@@ -369,7 +484,7 @@ function reviewItemFromAnnotation(item: PaperAnnotation): PaperReviewItem {
       item.texAnchor?.contextAfter ||
       item.markdownAnchor?.contextAfter ||
       item.pdfAnchor?.contextAfter,
-    comment: item.body,
+    comment: annotationCommentText(item),
     suggested_change: item.suggestedChange,
     pdf_page: item.pdfAnchor?.page,
     anchor_confidence:
@@ -440,7 +555,52 @@ function serializeReviewSummary(items: PaperAnnotation[]): string {
       lines.push("```");
       lines.push("");
     }
-    lines.push(item.body || "无正文");
+    lines.push(annotationCommentText(item) || "无正文");
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+function serializeAnnotationExportMarkdown(items: PaperAnnotation[], title = "当前文件批注"): string {
+  const sorted = items
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const lines = [
+    `# ${title}`,
+    "",
+    `- 导出时间：${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`,
+    `- 批注数量：${sorted.length}`,
+    "",
+  ];
+  for (const item of sorted) {
+    const file = item.texAnchor?.file || item.markdownAnchor?.file || item.documentPath || "未知文件";
+    const line = item.texAnchor?.line
+      ? `:${item.texAnchor.line}${item.texAnchor.lineEnd && item.texAnchor.lineEnd !== item.texAnchor.line ? `-${item.texAnchor.lineEnd}` : ""}`
+      : item.pdfAnchor?.page
+        ? ` · PDF 第 ${item.pdfAnchor.page} 页`
+        : "";
+    const quote = item.selectedText || item.markdownAnchor?.textQuote || item.pdfAnchor?.textQuote || item.texAnchor?.sourceText || item.sourceText;
+    lines.push(`## ${item.status === "open" ? "未处理" : item.status === "resolved" ? "已解决" : "忽略"} · ${file}${line}`);
+    lines.push("");
+    if (quote) {
+      lines.push("> 选中内容：");
+      lines.push("");
+      lines.push("```");
+      lines.push(quote.trim());
+      lines.push("```");
+      lines.push("");
+    }
+    const messages = threadMessages(item);
+    if (!messages.length) {
+      lines.push("无评论内容。", "");
+      continue;
+    }
+    messages.forEach((message, index) => {
+      const author = message.author || "未知用户";
+      const time = message.updatedAt || message.createdAt;
+      const prefix = index === 0 ? `${author} 评论` : `${author} 回复${message.replyToAuthor ? ` ${message.replyToAuthor}` : ""}`;
+      lines.push(`- **${prefix}**（${time}）：${message.body}`);
+    });
     lines.push("");
   }
   return lines.join("\n");
@@ -451,7 +611,7 @@ function serializeAnnotationsJsonl(items: PaperAnnotation[]): string {
     items
       .slice()
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .map((item) => JSON.stringify(item))
+      .map((item) => JSON.stringify(normalizeAnnotationThread(item)))
       .join("\n") + (items.length ? "\n" : "")
   );
 }
@@ -483,6 +643,7 @@ export const useAppStore = defineStore("app", () => {
   const gitEntries = ref<GitStatusEntry[]>([]);
   const githubToken = ref<string | null>(null);
   const githubUserHint = ref<string>("");
+  const commentAuthorName = ref<string>("");
   const darkMode = ref(true);
   const previewVisible = ref(true);
   const explorerVisible = ref(true);
@@ -500,6 +661,19 @@ export const useAppStore = defineStore("app", () => {
   const markdownPreviewLine = ref<number | null>(null);
   const annotations = ref<PaperAnnotation[]>([]);
   const activeAnnotationId = ref<string>();
+
+  function currentAnnotationAuthor() {
+    return commentAuthorName.value.trim() || workspace.value?.owner?.trim() || "我";
+  }
+
+  async function setCommentAuthorName(value: string) {
+    const next = value.trim();
+    commentAuthorName.value = next;
+    if (workspace.value && !workspace.value.owner) {
+      workspace.value = { ...workspace.value, owner: next };
+    }
+    await persist();
+  }
 
   let openRequestId = 0;
   let pdfPreviewRequestId = 0;
@@ -616,6 +790,7 @@ export const useAppStore = defineStore("app", () => {
       activeDocumentId: activeId,
       fileTree: [],
       workspace: workspace.value,
+      commentAuthorName: commentAuthorName.value,
       gitStatus: [],
       editor: {
         darkMode: darkMode.value,
@@ -696,6 +871,14 @@ export const useAppStore = defineStore("app", () => {
         : documents.value[0]?.id;
       fileTree.value = [];
       workspace.value = initial.workspace;
+      commentAuthorName.value = initial.commentAuthorName || initial.workspace?.owner || "";
+      if (!commentAuthorName.value.trim()) {
+        try {
+          commentAuthorName.value = (await currentSystemUsername()) || "";
+        } catch {
+          commentAuthorName.value = "";
+        }
+      }
       gitEntries.value = [];
       darkMode.value = initial.editor?.darkMode ?? true;
       previewVisible.value = initial.editor?.previewVisible ?? true;
@@ -745,7 +928,8 @@ export const useAppStore = defineStore("app", () => {
       busy.value = true;
       error.value = "";
       try {
-        const normalized = normalizeWorkspace(nextWorkspace);
+        const normalized = { ...normalizeWorkspace(nextWorkspace), source: "github" as const };
+        if (normalized.owner) commentAuthorName.value = normalized.owner;
         status.value = "正在后台获取/更新仓库，界面仍可继续操作…";
         const output = await cloneOrUpdateRepository(
           normalized,
@@ -765,14 +949,105 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  function clearWorkspaceDocumentsForNewRoot() {
+    documents.value = documents.value.filter((doc) => doc.source === "scratch");
+    if (!documents.value.length) documents.value.push(defaultDocument());
+    activeDocumentId.value = documents.value[0]?.id;
+    pdfPreviewUrl.value = "";
+    pdfPreviewPath.value = "";
+    pdfSyncPoint.value = null;
+    latexResult.value = null;
+  }
+
+  async function openLocalEntry(kind: "folder" | "file") {
+    return kind === "folder" ? openLocalFolder() : openLocalFile();
+  }
+
+  async function openLocalFolder() {
+    const folder = await pickLocalFolder();
+    if (!folder) {
+      status.value = "已取消打开本地文件夹。";
+      return;
+    }
+    busy.value = true;
+    error.value = "";
+    try {
+      const cleaned = stripTrailingSeparators(folder);
+      workspace.value = {
+        source: "local",
+        localOpenKind: "folder",
+        localFileName: undefined,
+        owner: commentAuthorName.value.trim(),
+        repo: baseNameOfPath(cleaned),
+        branch: "",
+        localDir: cleaned,
+        rootPath: "",
+      };
+      selectedNodePath.value = undefined;
+      gitEntries.value = [];
+      clearWorkspaceDocumentsForNewRoot();
+      await loadAnnotations();
+      await refreshWorkspace();
+      const first = findFirstFileNode(fileTree.value);
+      if (first) {
+        await openWorkspaceFile(first);
+      } else {
+        status.value = `已打开本地文件夹：${cleaned}`;
+      }
+      await persist();
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function openLocalFile() {
+    const file = await pickLocalFile();
+    if (!file) {
+      status.value = "已取消打开本地文件。";
+      return;
+    }
+    busy.value = true;
+    error.value = "";
+    try {
+      const cleanedFile = file.replace(/\\/g, "/");
+      const folder = parentDirOfAbsolutePath(cleanedFile);
+      const name = baseNameOfPath(cleanedFile);
+      workspace.value = {
+        source: "local",
+        localOpenKind: "file",
+        localFileName: name,
+        owner: commentAuthorName.value.trim(),
+        repo: name,
+        branch: "",
+        localDir: folder,
+        rootPath: "",
+      };
+      gitEntries.value = [];
+      clearWorkspaceDocumentsForNewRoot();
+      await loadAnnotations();
+      fileTree.value = [singleFileNodeFromName(name)];
+      selectedNodePath.value = name;
+      await openWorkspaceFile(singleFileNodeFromName(name));
+      status.value = `已打开本地文件：${cleanedFile}`;
+      await persist();
+    } finally {
+      busy.value = false;
+    }
+  }
+
   async function refreshWorkspace() {
     if (!workspace.value?.localDir) return;
     return runExclusive("workspace-refresh", "刷新工作区", async () => {
       await loadAnnotations();
-      fileTree.value = await listWorkspaceFiles(
-        workspace.value!.localDir,
-        workspace.value!.rootPath || "",
-      );
+      if (workspace.value?.source === "local" && workspace.value.localOpenKind === "file") {
+        const name = workspace.value.localFileName;
+        fileTree.value = name ? [singleFileNodeFromName(name)] : [];
+      } else {
+        fileTree.value = await listWorkspaceFiles(
+          workspace.value!.localDir,
+          workspace.value!.rootPath || "",
+        );
+      }
       if (
         selectedNodePath.value &&
         !findNodeByPath(fileTree.value, selectedNodePath.value)
@@ -785,11 +1060,15 @@ export const useAppStore = defineStore("app", () => {
 
   async function refreshGitStatus() {
     if (!workspace.value?.localDir) return;
+    if (workspace.value.source === "local") {
+      gitEntries.value = [];
+      return;
+    }
     try {
       gitEntries.value = await gitStatus(workspace.value.localDir);
-    } catch (err) {
+    } catch {
+      // 普通本地目录可能不是 Git 仓库。这里不把 Git 状态失败当作编辑/批注错误。
       gitEntries.value = [];
-      error.value = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -1003,7 +1282,7 @@ export const useAppStore = defineStore("app", () => {
     if (doc.kind === "image" || doc.kind === "pdf")
       throw new Error("图片/PDF 不能在文本编辑器中保存。");
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     if (!doc.relativePath) {
       const defaultName =
         doc.kind === "latex"
@@ -1067,7 +1346,7 @@ export const useAppStore = defineStore("app", () => {
 
   async function createItemFromPrompt(parent?: FileNode) {
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     const contextNode = parent ?? selectedNode.value;
     const base = targetDirectoryFromNode(contextNode);
     const defaultPath = joinDisplayPath(base, "Untitled.md");
@@ -1114,7 +1393,7 @@ export const useAppStore = defineStore("app", () => {
 
   async function renameItem(node?: FileNode) {
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     const doc = activeDocument.value;
     const oldDisplayPath =
       node?.path || displayPathFromRelative(doc?.relativePath);
@@ -1151,7 +1430,7 @@ export const useAppStore = defineStore("app", () => {
 
   async function moveItemToTarget(source: FileNode, target?: FileNode) {
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     const targetDir = targetDirectoryFromNode(target);
     if (source.kind === "folder") {
       const sourcePath = normalizePath(source.path);
@@ -1188,7 +1467,7 @@ export const useAppStore = defineStore("app", () => {
 
   async function removeItem(node: FileNode) {
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     const relativePath = makeRelativePath(node.path);
     const ok = window.confirm(
       `确定删除 ${node.kind === "folder" ? "文件夹" : "文件"}？\n${relativePath}`,
@@ -1219,7 +1498,9 @@ export const useAppStore = defineStore("app", () => {
   async function submitGithub(message?: string) {
     return runExclusive("git-submit", "提交", async () => {
       if (!workspace.value?.localDir)
-        throw new Error("请先 clone 或打开一个本地工作区。");
+        throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
+      if (workspace.value.source === "local")
+        throw new Error("当前是本地工作区，不需要 GitHub 提交；请直接保存文件，批注会写入本地 .paper-notes。");
       if (!githubToken.value)
         throw new Error("请先粘贴 GitHub Token 并点击“保存凭据”。");
       const defaultMessage =
@@ -1351,7 +1632,7 @@ export const useAppStore = defineStore("app", () => {
 
   async function openWorkspacePathAtLine(relativePath: string, line: number) {
     if (!workspace.value?.localDir)
-      throw new Error("请先 clone 或打开一个本地工作区。");
+      throw new Error("请先获取 GitHub 仓库，或打开本地文件夹/文件。");
     const displayPath = displayPathFromRelative(relativePath) || relativePath;
     const absolutePath = `${workspace.value.localDir.replace(/[\\/]$/, "")}/${relativePath}`;
     const text = await readWorkspaceFile(
@@ -1497,6 +1778,7 @@ export const useAppStore = defineStore("app", () => {
       type: isHighlight ? "highlight" : isArea ? "area" : "text",
       status: "open",
       body: payload.body,
+      messages: [makeAnnotationMessage(payload.body, timestamp, currentAnnotationAuthor())],
       tags: [],
       documentPath: doc?.relativePath,
       selectedText: payload.textQuote,
@@ -1596,6 +1878,7 @@ export const useAppStore = defineStore("app", () => {
       type: "text",
       status: "open",
       body: payload.body,
+      messages: [makeAnnotationMessage(payload.body, timestamp, currentAnnotationAuthor())],
       tags: [],
       documentPath: doc.relativePath,
       selectedText,
@@ -1673,6 +1956,7 @@ export const useAppStore = defineStore("app", () => {
       type: "comment",
       status: "open",
       body,
+      messages: [makeAnnotationMessage(body, timestamp, currentAnnotationAuthor())],
       tags: [],
       documentPath: doc.relativePath,
       selectedText,
@@ -1742,8 +2026,82 @@ export const useAppStore = defineStore("app", () => {
     if (!item) return;
     item.status = payload.status;
     item.updatedAt = nowIso();
+    item.messages = threadMessages(item);
+    item.body = item.messages[0]?.body || item.body || "";
     activeAnnotationId.value = item.id;
     await saveAnnotations();
+  }
+
+  async function addAnnotationReply(payload: { id: string; body: string }) {
+    const item = annotations.value.find(
+      (annotation) => annotation.id === payload.id,
+    );
+    const body = payload.body.trim();
+    if (!item || !body) return;
+    const timestamp = nowIso();
+    const existingMessages = threadMessages(item);
+    const firstMessage = existingMessages[0];
+    item.messages = [
+      ...existingMessages,
+      makeAnnotationMessage(body, timestamp, currentAnnotationAuthor(), firstMessage),
+    ];
+    item.updatedAt = timestamp;
+    item.body = item.messages[0]?.body || item.body || "";
+    activeAnnotationId.value = item.id;
+    await saveAnnotations();
+    status.value = "已添加回复。";
+  }
+
+  async function updateAnnotationMessage(payload: {
+    id: string;
+    messageId: string;
+    body: string;
+  }) {
+    const item = annotations.value.find(
+      (annotation) => annotation.id === payload.id,
+    );
+    const body = payload.body.trim();
+    if (!item || !body) return;
+    const timestamp = nowIso();
+    item.messages = threadMessages(item).map((message) =>
+      message.id === payload.messageId
+        ? { ...message, body, updatedAt: timestamp }
+        : message,
+    );
+    item.body = item.messages[0]?.body || item.body || "";
+    item.updatedAt = timestamp;
+    activeAnnotationId.value = item.id;
+    await saveAnnotations();
+    status.value = "已更新评论。";
+  }
+
+  async function exportAnnotationsMarkdown() {
+    if (!workspace.value?.localDir)
+      throw new Error("请先获取/打开一个本地工作区。");
+    const doc = activeDocument.value;
+    const currentItems = visibleAnnotations.value;
+    if (!currentItems.length) {
+      throw new Error("当前文件没有可导出的批注。");
+    }
+    const baseName = (doc?.relativePath || doc?.title || "annotations")
+      .replace(/\.[^/.]+$/, "")
+      .split(/[\/]/)
+      .filter(Boolean)
+      .join("-")
+      .replace(/[<>:"/\\|?*]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "annotations";
+    const title = `${doc?.relativePath || doc?.title || "当前文件"} 批注`;
+    const savedPath = await saveTextFileWithDialog({
+      defaultDir: `${workspace.value.localDir.replace(/[\/]$/, "")}/.paper-notes`,
+      defaultFilename: `${baseName}-批注.md`,
+      text: serializeAnnotationExportMarkdown(currentItems, title),
+    });
+    if (!savedPath) {
+      status.value = "已取消导出。";
+      return;
+    }
+    status.value = `已导出当前文件批注：${savedPath}`;
+    await refreshGitStatus();
   }
 
   async function removeAnnotation(id: string) {
@@ -1853,6 +2211,7 @@ export const useAppStore = defineStore("app", () => {
     workspaceBusy,
     githubToken,
     githubUserHint,
+    commentAuthorName,
     darkMode,
     previewVisible,
     explorerVisible,
@@ -1881,6 +2240,10 @@ export const useAppStore = defineStore("app", () => {
     setGithubToken,
     forgetGithubToken,
     cloneWorkspace,
+    setCommentAuthorName,
+    openLocalEntry,
+    openLocalFolder,
+    openLocalFile,
     refreshWorkspace,
     refreshGitStatus,
     setActiveDocument,
@@ -1904,6 +2267,9 @@ export const useAppStore = defineStore("app", () => {
     createMarkdownPreviewAnnotation,
     createSourceAnnotation,
     updateAnnotationStatus,
+    addAnnotationReply,
+    updateAnnotationMessage,
+    exportAnnotationsMarkdown,
     removeAnnotation,
     focusAnnotation,
     syncMarkdownPreviewFromEditor,

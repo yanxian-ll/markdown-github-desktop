@@ -6,6 +6,7 @@ const props = defineProps<{
   visible: boolean;
   userHint?: string;
   workspace?: GitWorkspace;
+  commentAuthorName?: string;
   gitEntries: GitStatusEntry[];
   latexResult?: LatexBuildResult | null;
   busy?: boolean;
@@ -20,6 +21,7 @@ const emit = defineEmits<{
   setToken: [token: string];
   forgetToken: [];
   clone: [workspace: GitWorkspace];
+  updateAuthorName: [value: string];
   refresh: [];
   submit: [];
   buildLatex: [];
@@ -47,8 +49,11 @@ function onPdfQualityInput(event: Event) {
 watch(
   () => props.workspace,
   (workspace) => {
-    if (!workspace) return;
-    form.owner = workspace.owner;
+    if (!workspace) {
+      form.owner = props.commentAuthorName || form.owner;
+      return;
+    }
+    form.owner = workspace.owner || props.commentAuthorName || form.owner;
     form.repo = workspace.repo;
     form.branch = workspace.branch;
     form.localDir = workspace.localDir;
@@ -56,6 +61,17 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => props.commentAuthorName,
+  (name) => {
+    if (!props.workspace?.owner && name) form.owner = name;
+  },
+);
+
+function onOwnerInput() {
+  emit('updateAuthorName', form.owner);
+}
 </script>
 
 <template>
@@ -65,7 +81,6 @@ watch(
         <h2>设置</h2>
         <small>GitHub、本地工作区、LaTeX 构建</small>
       </div>
-      <button class="toolbar-icon" title="隐藏设置" @click="emit('hide')">⚙</button>
     </div>
     <section class="panel-section">
       <h3>GitHub Token</h3>
@@ -82,9 +97,9 @@ watch(
     </section>
 
     <section class="panel-section">
-      <h3>本地 Git 工作区</h3>
+      <h3>GitHub 工作区</h3>
       <div class="grid-form one-col">
-        <label>用户名<input v-model="form.owner" placeholder="yanxian-ll" /></label>
+        <label>用户名<input v-model="form.owner" placeholder="用于 GitHub，也作为批注作者" @input="onOwnerInput" /></label>
         <label>仓库<input v-model="form.repo" placeholder="test-markdown-notes" /></label>
         <label>分支<input v-model="form.branch" placeholder="main" /></label>
         <label>本地目录<input v-model="form.localDir" placeholder="C:/Users/你/Documents/test-markdown-notes" /></label>
@@ -96,7 +111,7 @@ watch(
         </button>
         <button class="ghost" :disabled="props.workspaceBusy || !props.workspace" @click="emit('refresh')">刷新</button>
       </div>
-      <p class="hint">批注保存在 <code>.paper-notes/</code>，点击顶部“提交”会随源码和图片一起提交。其他设备拉取后，用本软件打开项目即可看到批注。</p>
+      <p class="hint">用于从 GitHub 获取项目并推送修改。本地文件请在左侧“文档”栏点击 📂 打开。</p>
     </section>
 
     <section class="panel-section">

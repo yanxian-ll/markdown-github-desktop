@@ -8,6 +8,7 @@ const props = defineProps<{
   explorerVisible?: boolean;
   gitPanelVisible?: boolean;
   gitDirtyCount?: number;
+  githubWorkspace?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -31,8 +32,12 @@ const emit = defineEmits<{
       </div>
     </div>
     <div class="actions compact-actions">
-      <button :disabled="props.busy || !props.gitDirtyCount" title="提交源码、资源和批注到 Git" @click="emit('submitGithub')">
-        提交{{ props.gitDirtyCount ? `(${props.gitDirtyCount})` : '' }}
+      <button
+        :disabled="props.busy || !props.githubWorkspace || !props.gitDirtyCount"
+        :title="props.githubWorkspace ? '提交源码、资源和批注到 GitHub' : '本地工作区无需 GitHub 提交'"
+        @click="emit('submitGithub')"
+      >
+        提交{{ props.githubWorkspace && props.gitDirtyCount ? `(${props.gitDirtyCount})` : '' }}
       </button>
       <button class="toolbar-icon" :class="{ ghost: !props.previewVisible }" :title="props.previewVisible ? '隐藏预览' : '显示预览'" @click="emit('togglePreview')">
         {{ props.previewVisible ? '◫' : '◧' }}

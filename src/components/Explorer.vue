@@ -17,6 +17,7 @@ const emit = defineEmits<{
   rename: [node?: FileNode];
   delete: [node: FileNode];
   refresh: [];
+  openLocal: [kind: "folder" | "file"];
   hide: [];
   select: [node?: FileNode];
   move: [payload: { source: FileNode; target?: FileNode }];
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 
 const draggedNode = ref<FileNode | null>(null);
 const rootDragOver = ref(false);
+const openMenuVisible = ref(false);
 
 function createFromSelection() {
   emit('create');
@@ -57,7 +59,7 @@ const TreeNode: any = defineComponent({
   },
   emits: ['open', 'create', 'rename', 'delete', 'select', 'dragstart-node', 'dragend-node', 'drop-node'],
   setup(componentProps, { emit: componentEmit }) {
-    const expanded = ref(true);
+    const expanded = ref(false);
     const dragOver = ref(false);
 
     const icon = () => {
@@ -204,7 +206,14 @@ const TreeNode: any = defineComponent({
         <small>{{ props.dirtyCount ? `${props.dirtyCount} 个未保存` : '本地工作区目录树' }}</small>
       </div>
       <div class="sidebar-header-actions">
-        <button class="icon-button primary" title="在当前选中目录中新建；未选中时在根目录新建" @click="createFromSelection">＋</button>
+        <div class="open-local-menu-wrap">
+          <button class="icon-button primary" title="打开本地文档" @click.stop="openMenuVisible = !openMenuVisible">📂</button>
+          <div v-if="openMenuVisible" class="open-local-menu" @click.stop>
+            <button @click="openMenuVisible = false; emit('openLocal', 'folder')">打开文件夹</button>
+            <button @click="openMenuVisible = false; emit('openLocal', 'file')">打开文件</button>
+          </div>
+        </div>
+        <button class="icon-button" title="在当前选中目录中新建；未选中时在根目录新建" @click="createFromSelection">＋</button>
         <button class="icon-button" title="刷新目录树" @click="emit('refresh')">↻</button>
         <button class="icon-button" title="隐藏文档树" @click="emit('hide')">☰</button>
       </div>
@@ -212,8 +221,7 @@ const TreeNode: any = defineComponent({
 
     <div class="explorer-help">
       <span>
-        未选中时，<strong>＋</strong> 默认在根目录创建；选中文件夹后在该文件夹内创建；选中文件后在它的父目录创建。
-        支持点击 <strong>✎</strong> 重命名，拖动文件/文件夹移动位置。
+        <strong>📂</strong> 打开本地文档；<strong>＋</strong> 新建；<strong>✎</strong> 重命名。文件夹默认折叠，点击展开。
       </span>
     </div>
 
@@ -226,7 +234,7 @@ const TreeNode: any = defineComponent({
       @drop.prevent="dropToRoot"
     >
       <div v-if="!props.tree.length" class="empty-state">
-        当前目录树为空。请先在设置中获取/更新仓库，或确认“本地目录”和“子目录”填写正确。
+        当前没有打开文档。点击上方 📂 打开本地文件或文件夹，也可以在设置中获取/更新 GitHub 工作区。
       </div>
 
       <ul v-else class="tree-root" @click.stop>

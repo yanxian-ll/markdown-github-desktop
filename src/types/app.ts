@@ -8,6 +8,12 @@ export type DocumentKind =
   | "pdf";
 
 export interface GitWorkspace {
+  /** github: 从 GitHub 获取/更新；local: 直接打开本地文件夹或文件。 */
+  source?: "github" | "local";
+  /** local 模式下用于区分“打开文件夹”和“只打开一个文件”。 */
+  localOpenKind?: "folder" | "file";
+  /** localOpenKind=file 时，只在文档区显示和操作这个文件。 */
+  localFileName?: string;
   owner: string;
   repo: string;
   branch: string;
@@ -140,11 +146,26 @@ export interface PaperTexAnchor {
   surroundingTextHash?: string;
 }
 
+export interface PaperAnnotationMessage {
+  id: string;
+  body: string;
+  author?: string;
+  replyToMessageId?: string;
+  replyToAuthor?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface PaperAnnotation {
   id: string;
   type: PaperAnnotationType;
   status: PaperAnnotationStatus;
+  /**
+   * First message body kept for compatibility with v0.4.x annotations.
+   * New v0.5.0 comments use messages[] as the source of truth.
+   */
   body: string;
+  messages?: PaperAnnotationMessage[];
   tags: string[];
   documentPath?: string;
   pdfAnchor?: PaperPdfAnchor;
@@ -196,6 +217,8 @@ export interface PersistedAppState {
   activeDocumentId?: string;
   fileTree: FileNode[];
   workspace?: GitWorkspace;
+  /** 设置中的用户名，也作为本地文件/文件夹批注作者。 */
+  commentAuthorName?: string;
   gitStatus: GitStatusEntry[];
   editor: {
     darkMode: boolean;

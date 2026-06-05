@@ -42,6 +42,7 @@ const {
   previewVisible,
   status,
   workspace,
+  commentAuthorName,
 } = storeToRefs(store);
 
 const activeText = computed({
@@ -67,6 +68,9 @@ const splitLayoutActive = computed(
 );
 const annotationPanelAvailable = computed(() =>
   ["markdown", "latex", "pdf"].includes(activeKind.value || ""),
+);
+const pdfPreviewActive = computed(() =>
+  activeKind.value === "pdf" || (activeKind.value === "latex" && !!pdfPreviewUrl.value),
 );
 
 const explorerWidth = ref(280);
@@ -372,6 +376,7 @@ onBeforeUnmount(() => {
       :explorer-visible="explorerVisible"
       :git-panel-visible="gitPanelVisible"
       :git-dirty-count="gitDirtyCount"
+      :github-workspace="workspace?.source !== 'local' && !!workspace?.localDir"
       @submit-github="submitGithub"
       @toggle-preview="togglePreviewPane"
       @toggle-explorer="explorerVisible = !explorerVisible"
@@ -393,6 +398,7 @@ onBeforeUnmount(() => {
         @select="store.selectNode"
         @move="moveItem"
         @refresh="store.refreshWorkspace"
+        @open-local="store.openLocalEntry"
         @hide="explorerVisible = false"
       />
       <div
@@ -426,7 +432,7 @@ onBeforeUnmount(() => {
           @mousedown="startResize('preview', $event)"
         />
         <div v-if="effectivePreviewVisible" class="preview-column">
-          <div class="preview-header">
+          <div v-if="!pdfPreviewActive" class="preview-header">
             <span>预览</span>
             <button
               v-if="annotationPanelAvailable"
@@ -474,6 +480,9 @@ onBeforeUnmount(() => {
               :active-path="activeDocument?.relativePath"
               @jump="store.focusAnnotation"
               @status="store.updateAnnotationStatus"
+              @reply="store.addAnnotationReply"
+              @edit-message="store.updateAnnotationMessage"
+              @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
             />
           </div>
@@ -531,6 +540,9 @@ onBeforeUnmount(() => {
               :render-quality="pdfRenderQuality"
               :annotations="visiblePdfAnnotations"
               :active-annotation-id="activeAnnotationId"
+              :annotation-panel-visible="annotationPanelVisible"
+              :annotation-panel-available="annotationPanelAvailable"
+              @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
               @reverse-click="syncTexReverse"
               @create-annotation="createPdfAnnotation"
               @focus-annotation="store.focusAnnotation"
@@ -549,6 +561,9 @@ onBeforeUnmount(() => {
               :active-path="activeDocument?.relativePath"
               @jump="store.focusAnnotation"
               @status="store.updateAnnotationStatus"
+              @reply="store.addAnnotationReply"
+              @edit-message="store.updateAnnotationMessage"
+              @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
             />
           </div>
@@ -564,6 +579,9 @@ onBeforeUnmount(() => {
               :render-quality="pdfRenderQuality"
               :annotations="visiblePdfAnnotations"
               :active-annotation-id="activeAnnotationId"
+              :annotation-panel-visible="annotationPanelVisible"
+              :annotation-panel-available="annotationPanelAvailable"
+              @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
               @reverse-click="syncTexReverse"
               @create-annotation="createPdfAnnotation"
               @focus-annotation="store.focusAnnotation"
@@ -582,6 +600,9 @@ onBeforeUnmount(() => {
               :active-path="activeDocument?.relativePath"
               @jump="store.focusAnnotation"
               @status="store.updateAnnotationStatus"
+              @reply="store.addAnnotationReply"
+              @edit-message="store.updateAnnotationMessage"
+              @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
             />
           </div>
@@ -621,6 +642,7 @@ onBeforeUnmount(() => {
         :visible="gitPanelVisible"
         :user-hint="githubUserHint"
         :workspace="workspace"
+        :comment-author-name="commentAuthorName"
         :git-entries="gitEntries"
         :busy="busy"
         :git-busy="gitBusy"
@@ -632,6 +654,7 @@ onBeforeUnmount(() => {
         @set-token="store.setGithubToken"
         @forget-token="store.forgetGithubToken"
         @clone="store.cloneWorkspace"
+        @update-author-name="store.setCommentAuthorName"
         @refresh="store.refreshWorkspace"
         @submit="submitGithub"
         @build-latex="buildLatex"

@@ -23,6 +23,8 @@ const props = defineProps<{
   renderQuality?: number;
   annotations?: PaperAnnotation[];
   activeAnnotationId?: string;
+  annotationPanelVisible?: boolean;
+  annotationPanelAvailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -40,6 +42,7 @@ const emit = defineEmits<{
     },
   ];
   focusAnnotation: [annotation: PaperAnnotation];
+  toggleAnnotationPanel: [];
 }>();
 
 type RenderTaskLike = { promise: Promise<unknown>; cancel: () => void };
@@ -1496,30 +1499,33 @@ onBeforeUnmount(() => {
     @wheel="onWheel"
   >
     <div class="pdf-toolbar pdf-main-toolbar">
+      <strong class="pdf-toolbar-title">预览</strong>
+      <span class="toolbar-separator" />
       <button
         class="toolbar-icon"
         :class="{ active: isAnnotateMode }"
-        title="点击后进入/退出区域批注模式；开启后拖拽框选图表、公式或版式区域"
+        :title="isAnnotateMode ? '退出区域批注' : '区域批注'"
+        aria-label="区域批注"
         @click="toggleAnnotateView"
       >
-        {{ isAnnotateMode ? "退出区域批注" : "区域批注" }}
+        ▧
       </button>
       <span class="toolbar-separator" />
       <button
         class="toolbar-icon"
         :disabled="currentPage <= 1"
         title="上一页"
+        aria-label="上一页"
         @click="goPage(-1)"
       >
         ‹
       </button>
-      <span class="pdf-page-input"
-        >{{ currentPage }} / {{ pageCount || "-" }}</span
-      >
+      <span class="pdf-page-input">{{ currentPage }} / {{ pageCount || "-" }}</span>
       <button
         class="toolbar-icon"
         :disabled="!pageCount || currentPage >= pageCount"
         title="下一页"
+        aria-label="下一页"
         @click="goPage(1)"
       >
         ›
@@ -1527,7 +1533,8 @@ onBeforeUnmount(() => {
       <span class="toolbar-separator" />
       <button
         class="toolbar-icon"
-        title="缩小 PDF（也可 Ctrl/⌘ + 鼠标滚轮）"
+        title="缩小"
+        aria-label="缩小"
         @click="zoomOut"
       >
         −
@@ -1535,32 +1542,40 @@ onBeforeUnmount(() => {
       <span class="zoom-label">{{ Math.round(scale * 100) }}%</span>
       <button
         class="toolbar-icon"
-        title="放大 PDF（也可 Ctrl/⌘ + 鼠标滚轮）"
+        title="放大"
+        aria-label="放大"
         @click="zoomIn"
       >
         ＋
       </button>
       <button
         class="toolbar-icon"
-        title="重置为 PDF 原始大小"
+        title="原始大小"
+        aria-label="原始大小"
         @click="resetZoom"
       >
-        1:1
+        1×
       </button>
       <button
         class="toolbar-icon"
         :class="{ active: isAutoFit }"
-        title="自动适应预览宽度并居中"
+        title="适应宽度"
+        aria-label="适应宽度"
         @click="autoFitWidth"
       >
-        适宽
+        ↔
       </button>
-      <span class="toolbar-separator" />
-      <span class="pdf-quality-hint">{{
-        isAnnotateMode
-          ? "区域批注模式 · 拖拽框选图表/公式/版式"
-          : "定位/文字模式 · 选中文字可批注 · 右键可批注 · 双击 PDF 反向定位"
-      }}</span>
+      <span class="toolbar-spacer" />
+      <button
+        v-if="props.annotationPanelAvailable"
+        class="toolbar-icon"
+        :class="{ active: props.annotationPanelVisible }"
+        :title="props.annotationPanelVisible ? '隐藏批注' : '显示批注'"
+        aria-label="显示或隐藏批注"
+        @click="emit('toggleAnnotationPanel')"
+      >
+        {{ props.annotationPanelVisible ? '▥' : '▤' }}
+      </button>
     </div>
 
     <div v-if="!props.dataUrl && !loading" class="empty-state small">

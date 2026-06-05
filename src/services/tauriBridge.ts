@@ -29,6 +29,25 @@ export async function writeTextFile(path: string, text: string): Promise<void> {
   await invoke('write_text_file', { path, text });
 }
 
+export async function saveTextFileWithDialog(options: { defaultDir?: string; defaultFilename?: string; text: string }): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    const name = options.defaultFilename || 'annotations.md';
+    const blob = new Blob([options.text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    return name;
+  }
+  return invoke<string | null>('save_text_file_with_dialog', {
+    defaultDir: options.defaultDir,
+    defaultFilename: options.defaultFilename,
+    text: options.text,
+  });
+}
+
 export async function setSecret(account: string, value: string): Promise<void> {
   if (!isTauriRuntime()) {
     browserSecrets.set(account, value);
@@ -56,6 +75,21 @@ export async function openExternalUrl(url: string): Promise<void> {
     return;
   }
   await invoke('open_external_url', { url });
+}
+
+export async function currentSystemUsername(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<string | null>('current_system_username');
+}
+
+export async function pickLocalFolder(): Promise<string | null> {
+  if (!isTauriRuntime()) throw new Error('打开本地文件夹需要在 Tauri 桌面环境中运行。');
+  return invoke<string | null>('pick_local_folder');
+}
+
+export async function pickLocalFile(): Promise<string | null> {
+  if (!isTauriRuntime()) throw new Error('打开本地文件需要在 Tauri 桌面环境中运行。');
+  return invoke<string | null>('pick_local_file');
 }
 
 export async function listWorkspaceFiles(rootDir: string, rootPath = ''): Promise<FileNode[]> {

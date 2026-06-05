@@ -182,6 +182,35 @@ kbd {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
 }
+
+.open-local-control {
+  position: relative;
+  display: inline-flex;
+}
+.open-local-menu {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  z-index: 30;
+  min-width: 124px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+.open-local-menu button {
+  width: 100%;
+  border-radius: 8px;
+  padding: 7px 9px;
+  text-align: left;
+  background: transparent;
+}
+.open-local-menu button:hover {
+  background: var(--panel-2);
+}
 .explorer-help {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -1793,4 +1822,164 @@ button:disabled {
 .light .markdown-preview-content .markdown-source-flash {
   background: rgba(37, 99, 235, 0.14);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.24);
+}
+
+/* v0.5.0: Overleaf-style threaded comments. */
+.annotation-sidebar.v050 {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+.thread-header {
+  align-items: flex-start;
+}
+.thread-header .secondary {
+  padding: 5px 9px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.annotation-search-row input,
+.annotation-filter-grid select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+}
+.annotation-filter-grid {
+  display: grid;
+  grid-template-columns: 1fr 0.82fr;
+  gap: 8px;
+}
+.annotation-filter-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+.annotation-thread-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.annotation-thread {
+  display: grid;
+  gap: 7px;
+}
+.annotation-message {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.18);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.06);
+}
+.annotation-message-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.annotation-message-top strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.annotation-message-top button {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.annotation-message p {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.annotation-thread-card .annotation-actions button {
+  border-radius: 8px;
+}
+.light .annotation-search-row input,
+.light .annotation-filter-grid select {
+  background: #fff;
+  color: #0f172a;
+}
+.light .annotation-message {
+  background: rgba(15, 23, 42, 0.035);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+/* v0.5.5: compact PDF title toolbar and local-open chooser. */
+.open-local-menu-wrap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.open-local-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 118px;
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+.open-local-menu button {
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  white-space: nowrap;
+}
+.pdf-main-toolbar {
+  min-height: 38px;
+  height: 38px;
+  padding: 0 10px;
+  gap: 6px;
+  box-shadow: none;
+  border-bottom: 1px solid var(--border);
+}
+.pdf-toolbar-title {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 750;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+.pdf-main-toolbar .toolbar-icon {
+  width: 32px;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 9px;
+  font-size: 14px;
+}
+.pdf-main-toolbar .zoom-label,
+.pdf-main-toolbar .pdf-page-input {
+  min-width: auto;
+  padding: 0 5px;
+  font-size: 12px;
+}
+.pdf-main-toolbar .toolbar-separator {
+  height: 20px;
+  margin: 0 2px;
+}
+.paper-review-layout > .pdf-preview-pane,
+.pdf-preview-pane {
+  min-height: 100%;
 }

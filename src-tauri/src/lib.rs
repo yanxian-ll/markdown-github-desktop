@@ -2,6 +2,7 @@ use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    env,
     fs,
     path::{Component, Path, PathBuf},
     process::Command,
@@ -102,9 +103,65 @@ fn save_app_state(app: AppHandle, state: Value) -> Result<(), String> {
     fs::write(path, content).map_err(|error| format!("无法写入状态文件：{error}"))
 }
 
+
+#[tauri::command]
+fn current_system_username() -> Result<Option<String>, String> {
+    let candidates = ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "USERNAME", "USER", "LOGNAME"];
+    for key in candidates {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Ok(Some(trimmed.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|error| format!("无法读取文件 {path}：{error}"))
+}
+
+
+#[tauri::command]
+fn pick_local_folder() -> Result<Option<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn pick_local_file() -> Result<Option<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .add_filter("Supported", &[
+            "md", "markdown", "mdown", "mkd", "tex", "ltx", "bib", "txt", "sty", "cls",
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "pdf",
+        ])
+        .add_filter("All", &["*"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+
+#[tauri::command]
+fn save_text_file_with_dialog(default_dir: Option<String>, default_filename: Option<String>, text: String) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(dir) = default_dir.as_deref() {
+        dialog = dialog.set_directory(dir);
+    }
+    if let Some(name) = default_filename.as_deref() {
+        dialog = dialog.set_file_name(name);
+    }
+    dialog = dialog.add_filter("Markdown", &["md", "markdown"]).add_filter("Text", &["txt"]);
+    let Some(path) = dialog.save_file() else {
+        return Ok(None);
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建导出目录：{error}"))?;
+    }
+    fs::write(&path, text).map_err(|error| format!("无法写入导出文件 {}：{error}", path.display()))?;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -868,7 +925,11 @@ pub fn run() {
             load_app_state,
             save_app_state,
             read_text_file,
+            current_system_username,
+            pick_local_folder,
+            pick_local_file,
             write_text_file,
+            save_text_file_with_dialog,
             set_secret,
             get_secret,
             delete_secret,
