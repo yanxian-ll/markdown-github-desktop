@@ -4,34 +4,41 @@ import type { MarkdownDocument } from '../types/app';
 const props = defineProps<{
   active?: MarkdownDocument;
   busy?: boolean;
-  canSaveToGitHub?: boolean;
   previewVisible?: boolean;
+  explorerVisible?: boolean;
+  gitPanelVisible?: boolean;
+  gitDirtyCount?: number;
 }>();
 
 const emit = defineEmits<{
-  newFile: [];
-  saveLocal: [];
-  saveGithub: [];
+  submitGithub: [];
   togglePreview: [];
-  flush: [];
+  toggleExplorer: [];
+  toggleGitPanel: [];
 }>();
 </script>
 
 <template>
   <header class="toolbar">
     <div class="brand">
+      <button class="toolbar-icon" :title="props.explorerVisible ? '隐藏文档树' : '显示文档树'" @click="emit('toggleExplorer')">
+        {{ props.explorerVisible ? '☰' : '📁' }}
+      </button>
       <span class="logo">✦</span>
       <div>
-        <strong>Markdown GitHub Desktop</strong>
-        <small>{{ props.active?.title || '未选择文档' }}</small>
+        <strong>Markdown LaTeX Git Desktop</strong>
+        <small>{{ props.active?.relativePath || props.active?.title || '未选择文档' }}{{ props.active?.dirty ? ' · 未保存' : '' }}</small>
       </div>
     </div>
-    <div class="actions">
-      <button @click="emit('newFile')">新建</button>
-      <button :disabled="!props.active || props.busy" @click="emit('saveLocal')">保存本地</button>
-      <button :disabled="!props.canSaveToGitHub || props.busy" @click="emit('saveGithub')">提交 GitHub</button>
-      <button :class="{ ghost: !props.previewVisible }" @click="emit('togglePreview')">
-        {{ props.previewVisible ? '隐藏预览' : '显示预览' }}
+    <div class="actions compact-actions">
+      <button :disabled="props.busy || !props.gitDirtyCount" @click="emit('submitGithub')">
+        提交{{ props.gitDirtyCount ? `(${props.gitDirtyCount})` : '' }}
+      </button>
+      <button class="toolbar-icon" :class="{ ghost: !props.previewVisible }" :title="props.previewVisible ? '隐藏预览' : '显示预览'" @click="emit('togglePreview')">
+        {{ props.previewVisible ? '◫' : '◧' }}
+      </button>
+      <button class="toolbar-icon" :class="{ ghost: !props.gitPanelVisible }" :title="props.gitPanelVisible ? '隐藏设置' : '显示设置'" @click="emit('toggleGitPanel')">
+        ⚙
       </button>
     </div>
   </header>

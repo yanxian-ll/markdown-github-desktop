@@ -1,13 +1,13 @@
 [package]
-name = "markdown-github-desktop"
-version = "0.1.0"
-description = "A cross-platform Markdown editor with GitHub sync"
-authors = ["Markdown GitHub Desktop Contributors"]
+name = "markdown-latex-git-desktop"
+version = "0.4.1"
+description = "A cross-platform Markdown/LaTeX editor with local Git workspace and manual GitHub push"
+authors = ["Markdown LaTeX Git Desktop Contributors"]
 edition = "2021"
 license = "Apache-2.0"
 
 [lib]
-name = "markdown_github_desktop_lib"
+name = "markdown_latex_git_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

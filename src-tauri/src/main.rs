@@ -1,3 +1,3 @@
 fn main() {
-    markdown_github_desktop_lib::run()
+    markdown_latex_git_desktop_lib::run()
 }
