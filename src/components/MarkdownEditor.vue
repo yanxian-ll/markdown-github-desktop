@@ -1,20 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorView, basicSetup } from 'codemirror';
+import { StateEffect, StateField } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
-import { keymap, gutter, GutterMarker } from '@codemirror/view';
+import { keymap, Decoration, type DecorationSet } from '@codemirror/view';
 import { oneDark } from '@codemirror/theme-one-dark';
-import type { DocumentKind, PaperAnnotation } from '../types/app';
+import type { DocumentKind } from '../types/app';
 
 const props = defineProps<{
   modelValue: string;
   darkMode?: boolean;
   kind?: DocumentKind;
   gotoLine?: number | null;
-  sourceAnnotations?: PaperAnnotation[];
-  activeAnnotationId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -22,37 +21,37 @@ const emit = defineEmits<{
   save: [];
   build: [];
   sourceDblclick: [payload: { line: number; column: number }];
-  sourceAnnotate: [payload: { line: number; column: number }];
-  focusAnnotation: [annotation: PaperAnnotation];
+  markdownSourceClick: [payload: { line: number; column: number }];
 }>();
 
 const host = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 let applyingExternalUpdate = false;
 let lastEmittedValue: string | null = null;
+let flashTimer = 0;
 
-class AnnotationMarker extends GutterMarker {
-  constructor(private readonly count: number, private readonly annotations: PaperAnnotation[]) { super(); }
 
-  toDOM() {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'cm-annotation-marker';
-    button.textContent = this.count > 1 ? String(this.count) : '●';
-    button.title = this.annotations.map((item) => item.body).join('\n---\n');
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const first = this.annotations[0];
-      if (first) emit('focusAnnotation', first);
-    });
-    return button;
-  }
-}
+const flashLineEffect = StateEffect.define<{ from: number }>();
+const clearFlashLineEffect = StateEffect.define<void>();
 
-const annotationKey = computed(() => (props.sourceAnnotations ?? [])
-  .map((item) => `${item.id}:${item.status}:${item.texAnchor?.line}:${item.updatedAt}:${item.id === props.activeAnnotationId}`)
-  .join('|'));
+const flashLineField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(flashLineEffect)) {
+        next = Decoration.set([Decoration.line({ class: 'cm-line-flash' }).range(effect.value.from)]);
+      }
+      if (effect.is(clearFlashLineEffect)) {
+        next = Decoration.none;
+      }
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function languageExtension() {
   if (props.kind === 'latex' || props.kind === 'bibtex') return StreamLanguage.define(stex);
@@ -67,44 +66,30 @@ function editorLineColumnFromMouse(event: MouseEvent) {
   return { line: line.number, column: Math.max(1, pos - line.from + 1) };
 }
 
-function editorCursorLineColumn() {
-  if (!view) return { line: 1, column: 1 };
-  const pos = view.state.selection.main.head;
-  const line = view.state.doc.lineAt(pos);
-  return { line: line.number, column: Math.max(1, pos - line.from + 1) };
-}
 
 function goToLine(lineNumber?: number | null) {
   if (!view || !lineNumber) return;
   const safeLine = Math.max(1, Math.min(lineNumber, view.state.doc.lines));
   const line = view.state.doc.line(safeLine);
+  window.clearTimeout(flashTimer);
   view.dispatch({
     selection: { anchor: line.from },
-    effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    effects: [
+      EditorView.scrollIntoView(line.from, { y: 'center' }),
+      flashLineEffect.of({ from: line.from }),
+    ],
   });
+  flashTimer = window.setTimeout(() => {
+    view?.dispatch({ effects: clearFlashLineEffect.of() });
+  }, 1200);
   view.focus();
-}
-
-function annotationGutter() {
-  return gutter({
-    class: 'cm-annotation-gutter',
-    lineMarker(view, line) {
-      if (props.kind !== 'latex') return null;
-      const lineNumber = view.state.doc.lineAt(line.from).number;
-      const matches = (props.sourceAnnotations ?? [])
-        .filter((item) => item.texAnchor?.line === lineNumber && item.status !== 'ignored');
-      if (!matches.length) return null;
-      return new AnnotationMarker(matches.length, matches);
-    },
-    initialSpacer: () => new AnnotationMarker(1, []),
-  });
 }
 
 function createExtensions() {
   return [
     basicSetup,
     languageExtension(),
-    annotationGutter(),
+    flashLineField,
     keymap.of([
       {
         key: 'Mod-s',
@@ -122,17 +107,14 @@ function createExtensions() {
           return true;
         },
       },
-      {
-        key: 'Mod-Alt-c',
-        preventDefault: true,
-        run: () => {
-          if (props.kind !== 'latex') return false;
-          emit('sourceAnnotate', editorCursorLineColumn());
-          return true;
-        },
-      },
     ]),
     EditorView.domEventHandlers({
+      click: (event) => {
+        if (props.kind !== 'markdown') return false;
+        const point = editorLineColumnFromMouse(event);
+        if (point) emit('markdownSourceClick', point);
+        return false;
+      },
       dblclick: (event) => {
         if (props.kind !== 'latex') return false;
         const point = editorLineColumnFromMouse(event);
@@ -152,18 +134,6 @@ function createExtensions() {
       '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: '14px', lineHeight: '1.65' },
       '.cm-content': { padding: '24px 20px 60px' },
       '.cm-gutters': { borderRight: '1px solid var(--border)' },
-      '.cm-annotation-gutter': { minWidth: '28px' },
-      '.cm-annotation-marker': {
-        width: '20px',
-        height: '20px',
-        padding: '0',
-        border: '0',
-        borderRadius: '999px',
-        background: 'rgba(250, 204, 21, 0.25)',
-        color: 'var(--warn)',
-        fontSize: '11px',
-        cursor: 'pointer',
-      },
     }),
     props.darkMode ? oneDark : [],
   ];
@@ -182,7 +152,7 @@ function recreateEditor() {
 
 onMounted(() => recreateEditor());
 
-watch(() => [props.darkMode, props.kind, annotationKey.value], recreateEditor);
+watch(() => [props.darkMode, props.kind], recreateEditor);
 
 watch(
   () => props.gotoLine,
@@ -205,6 +175,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  window.clearTimeout(flashTimer);
   view?.destroy();
   view = null;
 });

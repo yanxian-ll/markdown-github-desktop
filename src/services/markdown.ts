@@ -60,6 +60,19 @@ const md = new MarkdownIt({
   .use(sub)
   .use(sup);
 
+
+// Attach source-line metadata to block-level opening tokens so the rendered
+// Markdown preview can synchronize clicks with the source editor.
+md.core.ruler.push('source_line_attrs', (state) => {
+  for (const token of state.tokens) {
+    if (token.nesting !== 1 || !token.map) continue;
+    const [start, end] = token.map;
+    token.attrSet('data-source-line', String(start + 1));
+    token.attrSet('data-source-end-line', String(Math.max(start + 1, end)));
+    token.attrJoin('class', 'md-source-block');
+  }
+});
+
 const defaultFence = md.renderer.rules.fence?.bind(md.renderer.rules);
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];

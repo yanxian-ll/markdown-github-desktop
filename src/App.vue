@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import Explorer from './components/Explorer.vue';
-import GitPanel from './components/GitPanel.vue';
-import MarkdownEditor from './components/MarkdownEditor.vue';
-import MarkdownPreview from './components/MarkdownPreview.vue';
-import PdfPreview from './components/PdfPreview.vue';
-import AnnotationSidebar from './components/AnnotationSidebar.vue';
-import Toolbar from './components/Toolbar.vue';
-import { useAppStore } from './stores/appStore';
-import type { FileNode } from './types/app';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
+import Explorer from "./components/Explorer.vue";
+import GitPanel from "./components/GitPanel.vue";
+import MarkdownEditor from "./components/MarkdownEditor.vue";
+import MarkdownPreview from "./components/MarkdownPreview.vue";
+import PdfPreview from "./components/PdfPreview.vue";
+import AnnotationSidebar from "./components/AnnotationSidebar.vue";
+import Toolbar from "./components/Toolbar.vue";
+import { useAppStore } from "./stores/appStore";
+import type { FileNode, PaperAnnotationRect } from "./types/app";
 
 const store = useAppStore();
 const {
@@ -35,50 +35,90 @@ const {
   pdfSyncPoint,
   pdfRenderQuality,
   editorGotoLine,
+  markdownPreviewLine,
   activeAnnotationId,
   visibleAnnotations,
   visiblePdfAnnotations,
-  visibleSourceAnnotations,
   previewVisible,
   status,
   workspace,
 } = storeToRefs(store);
 
 const activeText = computed({
-  get: () => activeDocument.value?.text ?? '',
+  get: () => activeDocument.value?.text ?? "",
   set: (value: string) => store.updateActiveText(value),
 });
+
+const activeKind = computed(() => activeDocument.value?.kind);
+const editorAreaVisible = computed(
+  () => activeKind.value !== "image" && activeKind.value !== "pdf",
+);
+const previewCapable = computed(() =>
+  ["markdown", "latex", "image", "pdf"].includes(activeKind.value || ""),
+);
+const previewOnlyDocument = computed(
+  () => activeKind.value === "image" || activeKind.value === "pdf",
+);
+const effectivePreviewVisible = computed(
+  () => previewCapable.value && (previewVisible.value || previewOnlyDocument.value),
+);
+const splitLayoutActive = computed(
+  () => editorAreaVisible.value && effectivePreviewVisible.value,
+);
+const annotationPanelAvailable = computed(() =>
+  ["markdown", "latex", "pdf"].includes(activeKind.value || ""),
+);
 
 const explorerWidth = ref(280);
 const settingsWidth = ref(360);
 const previewWidth = ref(560);
 const imageZoom = ref(1);
-let resizeTarget: 'explorer' | 'settings' | 'preview' | null = null;
+const annotationPanelVisible = ref(true);
+const annotationPanelWidth = ref(300);
+let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | null =
+  null;
+let annotationResizeRight = 0;
 
 const layoutClass = computed(() => ({
-  'explorer-hidden': !explorerVisible.value,
-  'git-hidden': !gitPanelVisible.value,
-  'preview-hidden': !previewVisible.value,
+  "explorer-hidden": !explorerVisible.value,
+  "git-hidden": !gitPanelVisible.value,
+  "preview-hidden": !previewVisible.value,
   resizing: !!resizeTarget,
 }));
 
 const workspaceStyle = computed(() => {
   const columns: string[] = [];
-  if (explorerVisible.value) columns.push(`${explorerWidth.value}px`, '6px');
-  columns.push('minmax(360px, 1fr)');
-  if (gitPanelVisible.value) columns.push('6px', `${settingsWidth.value}px`);
-  return { gridTemplateColumns: columns.join(' ') };
+  if (explorerVisible.value) columns.push(`${explorerWidth.value}px`, "6px");
+  columns.push("minmax(360px, 1fr)");
+  if (gitPanelVisible.value) columns.push("6px", `${settingsWidth.value}px`);
+  return { gridTemplateColumns: columns.join(" ") };
 });
 
 const editorLayoutStyle = computed(() => {
-  if (!previewVisible.value) return { gridTemplateColumns: '1fr' };
-  return { gridTemplateColumns: `minmax(220px, 1fr) 6px ${previewWidth.value}px` };
+  if (!splitLayoutActive.value) return { gridTemplateColumns: "1fr" };
+  return {
+    gridTemplateColumns: `minmax(220px, 1fr) 6px ${previewWidth.value}px`,
+  };
+});
+
+const paperReviewLayoutStyle = computed(() => {
+  if (!annotationPanelVisible.value)
+    return { gridTemplateColumns: "minmax(320px, 1fr)" };
+  return {
+    gridTemplateColumns: `minmax(320px, 1fr) 6px ${annotationPanelWidth.value}px`,
+  };
 });
 
 let imageGestureBaseZoom = 1;
 let persistTimer: number | undefined;
 watch(
-  () => [darkMode.value, previewVisible.value, explorerVisible.value, gitPanelVisible.value, activeDocumentId.value],
+  () => [
+    darkMode.value,
+    previewVisible.value,
+    explorerVisible.value,
+    gitPanelVisible.value,
+    activeDocumentId.value,
+  ],
   () => {
     window.clearTimeout(persistTimer);
     persistTimer = window.setTimeout(() => store.persist(), 500);
@@ -96,31 +136,63 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function startResize(target: 'explorer' | 'settings' | 'preview', event: MouseEvent) {
+function startResize(
+  target: "explorer" | "settings" | "preview" | "annotation",
+  event: MouseEvent,
+) {
   resizeTarget = target;
+  if (target === "annotation") {
+    const layout = (event.currentTarget as HTMLElement).closest(
+      ".paper-review-layout",
+    ) as HTMLElement | null;
+    annotationResizeRight =
+      layout?.getBoundingClientRect().right ?? window.innerWidth;
+  }
   event.preventDefault();
-  document.body.classList.add('drag-resizing');
+  document.body.classList.add("drag-resizing");
 }
 
 function onResizeMove(event: MouseEvent) {
   if (!resizeTarget) return;
   const width = window.innerWidth;
-  if (resizeTarget === 'explorer') {
+  if (resizeTarget === "explorer") {
     explorerWidth.value = clamp(event.clientX, 190, Math.min(560, width - 720));
-  } else if (resizeTarget === 'settings') {
-    settingsWidth.value = clamp(width - event.clientX, 280, Math.min(620, width - 720));
-  } else if (resizeTarget === 'preview') {
-    const rightPanelWidth = gitPanelVisible.value ? settingsWidth.value + 14 : 0;
-    const leftWorkspaceWidth = explorerVisible.value ? explorerWidth.value + 6 : 0;
+  } else if (resizeTarget === "settings") {
+    settingsWidth.value = clamp(
+      width - event.clientX,
+      280,
+      Math.min(620, width - 720),
+    );
+  } else if (resizeTarget === "preview") {
+    const rightPanelWidth = gitPanelVisible.value
+      ? settingsWidth.value + 14
+      : 0;
+    const leftWorkspaceWidth = explorerVisible.value
+      ? explorerWidth.value + 6
+      : 0;
     const minEditorWidth = 220;
-    const maxPreviewWidth = Math.max(360, width - leftWorkspaceWidth - rightPanelWidth - minEditorWidth - 24);
-    previewWidth.value = clamp(width - event.clientX - rightPanelWidth, 320, maxPreviewWidth);
+    const maxPreviewWidth = Math.max(
+      360,
+      width - leftWorkspaceWidth - rightPanelWidth - minEditorWidth - 24,
+    );
+    previewWidth.value = clamp(
+      width - event.clientX - rightPanelWidth,
+      320,
+      maxPreviewWidth,
+    );
+  } else if (resizeTarget === "annotation") {
+    const maxAnnotationWidth = Math.max(220, annotationResizeRight - 300);
+    annotationPanelWidth.value = clamp(
+      annotationResizeRight - event.clientX,
+      220,
+      Math.min(620, maxAnnotationWidth),
+    );
   }
 }
 
 function stopResize() {
   resizeTarget = null;
-  document.body.classList.remove('drag-resizing');
+  document.body.classList.remove("drag-resizing");
 }
 
 function zoomImage(delta: number) {
@@ -128,7 +200,11 @@ function zoomImage(delta: number) {
 }
 
 function onImageWheel(event: WheelEvent) {
-  const shouldZoom = event.ctrlKey || event.metaKey || event.altKey || Math.abs(event.deltaZ || 0) > 0;
+  const shouldZoom =
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    Math.abs(event.deltaZ || 0) > 0;
   if (!shouldZoom) return;
   event.preventDefault();
   const direction = event.deltaY > 0 || event.deltaZ > 0 ? -1 : 1;
@@ -143,8 +219,12 @@ function onImageGestureStart(event: Event) {
 function onImageGestureChange(event: Event) {
   event.preventDefault();
   const gesture = event as Event & { scale?: number };
-  if (typeof gesture.scale !== 'number') return;
-  imageZoom.value = clamp(Number((imageGestureBaseZoom * gesture.scale).toFixed(2)), 0.2, 3);
+  if (typeof gesture.scale !== "number") return;
+  imageZoom.value = clamp(
+    Number((imageGestureBaseZoom * gesture.scale).toFixed(2)),
+    0.2,
+    3,
+  );
 }
 
 async function saveLocal() {
@@ -161,6 +241,11 @@ async function submitGithub() {
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
+}
+
+function togglePreviewPane() {
+  if (!previewCapable.value || previewOnlyDocument.value) return;
+  previewVisible.value = !previewVisible.value;
 }
 
 async function createItem(parent?: FileNode) {
@@ -203,6 +288,15 @@ async function syncTexForward(payload: { line: number; column: number }) {
   }
 }
 
+
+function syncMarkdownPreview(payload: { line: number }) {
+  store.syncMarkdownPreviewFromEditor(payload.line);
+}
+
+function syncMarkdownEditor(payload: { line: number }) {
+  store.syncMarkdownEditorFromPreview(payload.line);
+}
+
 async function syncTexReverse(payload: { page: number; x: number; y: number }) {
   try {
     await store.syncTexReverseFromPdf(payload.page, payload.x, payload.y);
@@ -211,8 +305,16 @@ async function syncTexReverse(payload: { page: number; x: number; y: number }) {
   }
 }
 
-
-async function createPdfAnnotation(payload: { page: number; rect: { x: number; y: number; width: number; height: number }; body: string; x: number; y: number }) {
+async function createPdfAnnotation(payload: {
+  page: number;
+  rect?: PaperAnnotationRect;
+  rects?: PaperAnnotationRect[];
+  body: string;
+  x: number;
+  y: number;
+  textQuote?: string;
+  kind?: "area" | "text" | "highlight";
+}) {
   try {
     await store.createPdfAnnotation(payload);
   } catch (err) {
@@ -220,36 +322,44 @@ async function createPdfAnnotation(payload: { page: number; rect: { x: number; y
   }
 }
 
-async function createSourceAnnotation(payload?: { line: number; column: number }) {
+async function createMarkdownPreviewAnnotation(payload: {
+  selectedText: string;
+  rects?: PaperAnnotationRect[];
+  body: string;
+}) {
   try {
-    await store.createSourceAnnotation(payload?.line, payload?.column ?? 1);
+    await store.createMarkdownPreviewAnnotation(payload);
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
     saveLocal();
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b' && isLatexActive.value) {
+  if (
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === "b" &&
+    isLatexActive.value
+  ) {
     event.preventDefault();
     buildLatex();
   }
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', onKeydown);
-  window.addEventListener('mousemove', onResizeMove);
-  window.addEventListener('mouseup', stopResize);
+  window.addEventListener("keydown", onKeydown);
+  window.addEventListener("mousemove", onResizeMove);
+  window.addEventListener("mouseup", stopResize);
   await store.initialize();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown);
-  window.removeEventListener('mousemove', onResizeMove);
-  window.removeEventListener('mouseup', stopResize);
+  window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("mousemove", onResizeMove);
+  window.removeEventListener("mouseup", stopResize);
 });
 </script>
 
@@ -258,12 +368,12 @@ onBeforeUnmount(() => {
     <Toolbar
       :active="activeDocument"
       :busy="gitBusy"
-      :preview-visible="previewVisible"
+      :preview-visible="effectivePreviewVisible"
       :explorer-visible="explorerVisible"
       :git-panel-visible="gitPanelVisible"
       :git-dirty-count="gitDirtyCount"
       @submit-github="submitGithub"
-      @toggle-preview="previewVisible = !previewVisible"
+      @toggle-preview="togglePreviewPane"
       @toggle-explorer="explorerVisible = !explorerVisible"
       @toggle-git-panel="gitPanelVisible = !gitPanelVisible"
     />
@@ -285,56 +395,136 @@ onBeforeUnmount(() => {
         @refresh="store.refreshWorkspace"
         @hide="explorerVisible = false"
       />
-      <div v-if="explorerVisible" class="resize-handle vertical" title="拖动调整文档栏宽度" @mousedown="startResize('explorer', $event)" />
+      <div
+        v-if="explorerVisible"
+        class="resize-handle vertical"
+        title="拖动调整文档栏宽度"
+        @mousedown="startResize('explorer', $event)"
+      />
 
-      <section class="editor-layout" :class="{ 'preview-hidden': !previewVisible }" :style="editorLayoutStyle">
-        <div class="editor-column">
-          <div v-if="activeDocument?.kind === 'image' || activeDocument?.kind === 'pdf'" class="asset-editor-placeholder">
-            <h2>{{ activeDocument?.kind === 'image' ? '图片资源' : 'PDF 文件' }}</h2>
-            <p><code>{{ activeDocument?.relativePath || activeDocument?.title }}</code></p>
-            <p>此类文件作为论文/Markdown 资源管理，不在文本编辑器中编辑。图片/PDF 会在右侧预览。</p>
-          </div>
+      <section
+        class="editor-layout"
+        :class="{ 'preview-hidden': !effectivePreviewVisible, 'editor-hidden': !editorAreaVisible }"
+        :style="editorLayoutStyle"
+      >
+        <div v-if="editorAreaVisible" class="editor-column">
           <MarkdownEditor
-            v-else
             v-model="activeText"
             :dark-mode="darkMode"
             :kind="activeDocument?.kind"
             :goto-line="editorGotoLine"
-            :source-annotations="visibleSourceAnnotations"
-            :active-annotation-id="activeAnnotationId"
             @save="saveLocal"
             @build="buildLatex"
             @source-dblclick="syncTexForward"
-            @source-annotate="createSourceAnnotation"
-            @focus-annotation="store.focusAnnotation"
+            @markdown-source-click="syncMarkdownPreview"
           />
         </div>
-        <div v-if="previewVisible" class="resize-handle vertical in-editor" title="拖动调整预览宽度" @mousedown="startResize('preview', $event)" />
-        <div v-if="previewVisible" class="preview-column">
+        <div
+          v-if="splitLayoutActive"
+          class="resize-handle vertical in-editor"
+          title="拖动调整预览宽度"
+          @mousedown="startResize('preview', $event)"
+        />
+        <div v-if="effectivePreviewVisible" class="preview-column">
           <div class="preview-header">
             <span>预览</span>
-            <button class="toolbar-icon" title="隐藏预览" @click="previewVisible = false">◫</button>
+            <button
+              v-if="annotationPanelAvailable"
+              class="toolbar-icon"
+              :class="{ active: annotationPanelVisible }"
+              :title="
+                annotationPanelVisible ? '隐藏批注' : '显示批注'
+              "
+              @click="annotationPanelVisible = !annotationPanelVisible"
+            >
+              {{ annotationPanelVisible ? '▥' : '▤' }}
+            </button>
           </div>
-          <MarkdownPreview
+          <div
             v-if="activeDocument?.kind === 'markdown'"
-            :text="activeText"
-            :dark-mode="darkMode"
-            :root-dir="workspace?.localDir"
-            :current-path="activeDocument?.relativePath"
-          />
-          <div v-else-if="activeDocument?.kind === 'image'" class="image-preview">
-            <div class="asset-toolbar">
-              <button class="toolbar-icon" title="缩小图片" @click="zoomImage(-0.15)">−</button>
-              <span class="zoom-label">{{ Math.round(imageZoom * 100) }}%</span>
-              <button class="toolbar-icon" title="放大图片" @click="zoomImage(0.15)">＋</button>
-              <button class="toolbar-icon" title="重置缩放" @click="imageZoom = 1">1:1</button>
+            class="paper-review-layout markdown-review-layout"
+            :class="{ 'annotation-hidden': !annotationPanelVisible }"
+            :style="paperReviewLayoutStyle"
+          >
+            <div class="markdown-review-pane">
+              <MarkdownPreview
+                :text="activeText"
+                :dark-mode="darkMode"
+                :root-dir="workspace?.localDir"
+                :current-path="activeDocument?.relativePath"
+                :annotations="visibleAnnotations"
+                :active-annotation-id="activeAnnotationId"
+                :active-source-line="markdownPreviewLine"
+                @create-annotation="createMarkdownPreviewAnnotation"
+                @focus-annotation="store.focusAnnotation"
+                @source-click="syncMarkdownEditor"
+              />
             </div>
-            <div class="image-canvas" @wheel="onImageWheel" @gesturestart="onImageGestureStart" @gesturechange="onImageGestureChange">
-              <img :src="activeText" :alt="activeDocument?.title" :style="{ transform: `scale(${imageZoom})` }" />
+            <div
+              v-if="annotationPanelVisible"
+              class="resize-handle vertical annotation-resize"
+              title="拖动调整批注栏宽度"
+              @mousedown="startResize('annotation', $event)"
+            />
+            <AnnotationSidebar
+              v-if="annotationPanelVisible"
+              :annotations="visibleAnnotations"
+              :active-id="activeAnnotationId"
+              :latex-active="isLatexActive"
+              :active-path="activeDocument?.relativePath"
+              @jump="store.focusAnnotation"
+              @status="store.updateAnnotationStatus"
+              @remove="store.removeAnnotation"
+            />
+          </div>
+          <div
+            v-else-if="activeDocument?.kind === 'image'"
+            class="image-preview"
+          >
+            <div class="asset-toolbar">
+              <button
+                class="toolbar-icon"
+                title="缩小图片"
+                @click="zoomImage(-0.15)"
+              >
+                −
+              </button>
+              <span class="zoom-label">{{ Math.round(imageZoom * 100) }}%</span>
+              <button
+                class="toolbar-icon"
+                title="放大图片"
+                @click="zoomImage(0.15)"
+              >
+                ＋
+              </button>
+              <button
+                class="toolbar-icon"
+                title="重置缩放"
+                @click="imageZoom = 1"
+              >
+                1:1
+              </button>
+            </div>
+            <div
+              class="image-canvas"
+              @wheel="onImageWheel"
+              @gesturestart="onImageGestureStart"
+              @gesturechange="onImageGestureChange"
+            >
+              <img
+                :src="activeText"
+                :alt="activeDocument?.title"
+                :style="{ transform: `scale(${imageZoom})` }"
+              />
             </div>
             <p>{{ activeDocument?.relativePath }}</p>
           </div>
-          <div v-else-if="activeDocument?.kind === 'pdf'" class="paper-review-layout">
+          <div
+            v-else-if="activeDocument?.kind === 'pdf'"
+            class="paper-review-layout"
+            :class="{ 'annotation-hidden': !annotationPanelVisible }"
+            :style="paperReviewLayoutStyle"
+          >
             <PdfPreview
               :data-url="activeText"
               :sync-point="pdfSyncPoint"
@@ -345,7 +535,14 @@ onBeforeUnmount(() => {
               @create-annotation="createPdfAnnotation"
               @focus-annotation="store.focusAnnotation"
             />
+            <div
+              v-if="annotationPanelVisible"
+              class="resize-handle vertical annotation-resize"
+              title="拖动调整批注栏宽度"
+              @mousedown="startResize('annotation', $event)"
+            />
             <AnnotationSidebar
+              v-if="annotationPanelVisible"
               :annotations="visibleAnnotations"
               :active-id="activeAnnotationId"
               :latex-active="isLatexActive"
@@ -353,10 +550,14 @@ onBeforeUnmount(() => {
               @jump="store.focusAnnotation"
               @status="store.updateAnnotationStatus"
               @remove="store.removeAnnotation"
-              @create-source="createSourceAnnotation"
             />
           </div>
-          <div v-else-if="activeDocument?.kind === 'latex' && pdfPreviewUrl" class="paper-review-layout">
+          <div
+            v-else-if="activeDocument?.kind === 'latex' && pdfPreviewUrl"
+            class="paper-review-layout"
+            :class="{ 'annotation-hidden': !annotationPanelVisible }"
+            :style="paperReviewLayoutStyle"
+          >
             <PdfPreview
               :data-url="pdfPreviewUrl"
               :sync-point="pdfSyncPoint"
@@ -367,7 +568,14 @@ onBeforeUnmount(() => {
               @create-annotation="createPdfAnnotation"
               @focus-annotation="store.focusAnnotation"
             />
+            <div
+              v-if="annotationPanelVisible"
+              class="resize-handle vertical annotation-resize"
+              title="拖动调整批注栏宽度"
+              @mousedown="startResize('annotation', $event)"
+            />
             <AnnotationSidebar
+              v-if="annotationPanelVisible"
               :annotations="visibleAnnotations"
               :active-id="activeAnnotationId"
               :latex-active="isLatexActive"
@@ -375,19 +583,39 @@ onBeforeUnmount(() => {
               @jump="store.focusAnnotation"
               @status="store.updateAnnotationStatus"
               @remove="store.removeAnnotation"
-              @create-source="createSourceAnnotation"
             />
           </div>
           <div v-else class="latex-placeholder">
-            <h2>{{ activeDocument?.kind === 'latex' ? 'LaTeX / PDF 预览' : '文本文件' }}</h2>
-            <p v-if="activeDocument?.kind === 'latex'">打开 <code>.tex</code> 时会优先显示同名已构建 PDF；没有 PDF 时按 <kbd>Ctrl/Cmd+B</kbd> 构建。</p>
-            <p v-if="activeDocument?.kind === 'latex'">构建成功后：双击左侧 TeX 源码会定位到 PDF 对应页；双击右侧 PDF 会尝试反向定位到 TeX 源文件。</p>
-            <p>当前文件：<code>{{ activeDocument?.relativePath || activeDocument?.title }}</code></p>
+            <h2>
+              {{
+                activeDocument?.kind === "latex"
+                  ? "LaTeX / PDF 预览"
+                  : "文本文件"
+              }}
+            </h2>
+            <p v-if="activeDocument?.kind === 'latex'">
+              打开 <code>.tex</code> 时会优先显示同名已构建 PDF；没有 PDF 时按
+              <kbd>Ctrl/Cmd+B</kbd> 构建。
+            </p>
+            <p v-if="activeDocument?.kind === 'latex'">
+              构建成功后：双击左侧 TeX 源码会定位到 PDF 对应页；双击右侧 PDF
+              会尝试反向定位到 TeX 源文件。
+            </p>
+            <p>
+              当前文件：<code>{{
+                activeDocument?.relativePath || activeDocument?.title
+              }}</code>
+            </p>
           </div>
         </div>
       </section>
 
-      <div v-if="gitPanelVisible" class="resize-handle vertical" title="拖动调整设置栏宽度" @mousedown="startResize('settings', $event)" />
+      <div
+        v-if="gitPanelVisible"
+        class="resize-handle vertical"
+        title="拖动调整设置栏宽度"
+        @mousedown="startResize('settings', $event)"
+      />
       <GitPanel
         v-if="gitPanelVisible"
         :visible="gitPanelVisible"
@@ -415,10 +643,16 @@ onBeforeUnmount(() => {
     </main>
 
     <footer class="statusbar">
-      <button class="link-button" @click="darkMode = !darkMode">{{ darkMode ? '浅色' : '深色' }}</button>
-      <button class="link-button" @click="store.refreshWorkspace">刷新工作区</button>
-      <span>{{ busy ? '处理中…' : status }}</span>
-      <span v-if="activeDocumentId">当前：{{ activeDocument?.relativePath || activeDocument?.title }}</span>
+      <button class="link-button" @click="darkMode = !darkMode">
+        {{ darkMode ? "浅色" : "深色" }}
+      </button>
+      <button class="link-button" @click="store.refreshWorkspace">
+        刷新工作区
+      </button>
+      <span>{{ busy ? "处理中…" : status }}</span>
+      <span v-if="activeDocumentId"
+        >当前：{{ activeDocument?.relativePath || activeDocument?.title }}</span
+      >
       <span v-if="error" class="error">{{ error }}</span>
     </footer>
   </div>

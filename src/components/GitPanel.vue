@@ -84,20 +84,19 @@ watch(
     <section class="panel-section">
       <h3>本地 Git 工作区</h3>
       <div class="grid-form one-col">
-        <label>Owner<input v-model="form.owner" placeholder="yanxian-ll" /></label>
-        <label>Repo<input v-model="form.repo" placeholder="test-markdown-notes" /></label>
-        <label>Branch<input v-model="form.branch" placeholder="main" /></label>
-        <label>Local directory<input v-model="form.localDir" placeholder="C:/Users/你/Documents/test-markdown-notes" /></label>
-        <label>Sub path<input v-model="form.rootPath" placeholder="可留空，例如 docs" /></label>
+        <label>用户名<input v-model="form.owner" placeholder="yanxian-ll" /></label>
+        <label>仓库<input v-model="form.repo" placeholder="test-markdown-notes" /></label>
+        <label>分支<input v-model="form.branch" placeholder="main" /></label>
+        <label>本地目录<input v-model="form.localDir" placeholder="C:/Users/你/Documents/test-markdown-notes" /></label>
+        <label>子目录<input v-model="form.rootPath" placeholder="可留空，例如 docs" /></label>
       </div>
       <div class="button-row wrap">
         <button :disabled="props.workspaceBusy || props.gitBusy || !form.owner || !form.repo || !form.localDir" @click="emit('clone', { ...form })">
-          {{ props.workspaceBusy ? '更新中…' : 'clone / 更新 --depth=1' }}
+          {{ props.workspaceBusy ? '同步中…' : '获取/更新' }}
         </button>
-        <button class="ghost" :disabled="props.workspaceBusy || !props.workspace" @click="emit('refresh')">刷新状态</button>
-        <button :disabled="props.gitBusy || !props.gitEntries.length" @click="emit('submit')">{{ props.gitBusy ? '提交中…' : '提交' }}</button>
+        <button class="ghost" :disabled="props.workspaceBusy || !props.workspace" @click="emit('refresh')">刷新</button>
       </div>
-      <p class="hint">论文批注保存在 <code>.paper-notes/annotations.jsonl</code>，提交按钮会使用 <code>git add -A</code> 一起提交源码、图片和批注。其他设备 clone/pull 后，用本软件打开项目即可看到批注；GitHub 网页直接预览 PDF 不会显示 sidecar 批注。</p>
+      <p class="hint">批注保存在 <code>.paper-notes/</code>，点击顶部“提交”会随源码和图片一起提交。其他设备拉取后，用本软件打开项目即可看到批注。</p>
     </section>
 
     <section class="panel-section">
@@ -129,10 +128,9 @@ watch(
 
     <section class="panel-section latex-section">
       <h3>LaTeX</h3>
-      <p class="hint">用于论文模板：支持 .tex 主文件、.bib 文献库、.cls/.sty 模板文件和图片资源。建议安装 latexmk；没有 latexmk 时会回退到 pdflatex + bibtex/biber + pdflatex x2。</p>
+      <p class="hint">支持 .tex、.bib、.cls/.sty 和图片资源。建议安装 latexmk；未安装时会自动回退到 pdflatex 构建流程。</p>
       <div class="button-row wrap">
         <button :disabled="props.latexBusy || !props.latexActive" @click="emit('buildLatex')">{{ props.latexBusy ? '构建中…' : '构建 PDF' }}</button>
-        <button class="ghost" :disabled="props.latexBusy || !props.latexActive" @click="emit('openPdf')">打开 PDF</button>
         <button class="ghost" :disabled="props.latexBusy || !props.latexActive" @click="emit('cleanLatex')">清理辅助文件</button>
       </div>
       <div v-if="props.latexResult" class="latex-result" :class="{ ok: props.latexResult.ok }">

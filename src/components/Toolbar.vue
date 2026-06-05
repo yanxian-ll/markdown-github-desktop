@@ -26,12 +26,12 @@ const emit = defineEmits<{
       </button>
       <span class="logo">✦</span>
       <div>
-        <strong>Markdown LaTeX Git Desktop</strong>
+        <strong>Markdown / LaTeX 批注写作</strong>
         <small>{{ props.active?.relativePath || props.active?.title || '未选择文档' }}{{ props.active?.dirty ? ' · 未保存' : '' }}</small>
       </div>
     </div>
     <div class="actions compact-actions">
-      <button :disabled="props.busy || !props.gitDirtyCount" @click="emit('submitGithub')">
+      <button :disabled="props.busy || !props.gitDirtyCount" title="提交源码、资源和批注到 Git" @click="emit('submitGithub')">
         提交{{ props.gitDirtyCount ? `(${props.gitDirtyCount})` : '' }}
       </button>
       <button class="toolbar-icon" :class="{ ghost: !props.previewVisible }" :title="props.previewVisible ? '隐藏预览' : '显示预览'" @click="emit('togglePreview')">

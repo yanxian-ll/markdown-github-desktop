@@ -226,7 +226,7 @@ const TreeNode: any = defineComponent({
       @drop.prevent="dropToRoot"
     >
       <div v-if="!props.tree.length" class="empty-state">
-        当前目录树为空。请先 clone / 更新仓库，或确认右侧 Local directory 指向真实仓库目录、Sub path 留空或指向存在的子目录。
+        当前目录树为空。请先在设置中获取/更新仓库，或确认“本地目录”和“子目录”填写正确。
       </div>
 
       <ul v-else class="tree-root" @click.stop>
