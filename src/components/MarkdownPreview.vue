@@ -3,7 +3,7 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import mermaid from 'mermaid';
 import { renderMarkdown } from '../services/markdown';
 import { readWorkspaceDataUrl } from '../services/tauriBridge';
-import type { PaperAnnotation, PaperAnnotationRect } from '../types/app';
+import type { MarkdownRenderPreset, PaperAnnotation, PaperAnnotationRect } from '../types/app';
 
 const props = defineProps<{
   text: string;
@@ -13,6 +13,7 @@ const props = defineProps<{
   annotations?: PaperAnnotation[];
   activeAnnotationId?: string;
   activeSourceLine?: number | null;
+  renderPreset?: MarkdownRenderPreset;
 }>();
 
 const emit = defineEmits<{
@@ -345,6 +346,7 @@ onBeforeUnmount(() => {
   <article
     ref="previewRoot"
     class="markdown-preview markdown-preview-annotatable"
+    :class="`markdown-style-${props.renderPreset || 'default'}`"
     @click="onPreviewClick"
     @mouseup="onMouseUp"
     @contextmenu="onContextMenu"

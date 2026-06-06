@@ -1,182 +1,203 @@
-# 项目 TODO
+# Scholia Studio TODO
 
-> 维护约定：每次发布代码更新时必须同步更新本文件。最后更新：v0.9.2-brand-ui-polish.
+> 维护约定：每次发布代码更新必须同步更新本文件。  
+> 当前版本：v0.10.0-research-workbench-foundation  
+> 产品主线：不要做“凭空写论文”的 AI 编辑器，而是做“记录 → 证据 → 论文 → 审阅”的本地优先科研写作工作台。
 
+## 优先级定义
 
-## v0.9.2 本次完成：命名和文档区打开按钮视觉统一
+| 优先级 | 含义 | 上线标准 |
+| --- | --- | --- |
+| P0 | 上线前必须完成 | 不完成会影响数据安全、核心体验、首次使用或基本可信度。 |
+| P1 | 内测增长关键 | 直接强化差异化闭环，决定用户是否持续使用。 |
+| P2 | 差异化增强 | 建立“证据驱动 AI 写作”和论文工程能力。 |
+| P3 | 生态扩展 | 协作、发布、模板市场、插件和外部服务。 |
 
-- [x] 软件名称从描述型 `Markdown / LaTeX 批注写作` 调整为 `Scholia Studio`。
-- [x] Tauri `productName`、窗口标题、`package.json`、README、测试文档同步更新为 `Scholia Studio`。
-- [x] 左侧“文档”区域的打开按钮从 emoji 文件夹改为与现有圆形按钮一致的线性 SVG 图标。
-- [x] 顶部品牌 logo 从装饰符号改为 `S` 字母标识，便于后续品牌化。
-- [ ] 后续可继续设计正式应用图标、启动页和品牌配色。
-- [ ] 后续可支持用户在设置中切换显示名称/工作区标题格式。
+## v0.10.0 本次完成：研究工作台底层框架和交互重排
 
-## v0.9.0 本次完成：后续功能框架与 v0.9 模板系统基础
+- [x] 新增 `src/config/workbench.ts`，统一定义软件底层工作区：文档树、模板库、研究流、源码编辑、预览审阅、设置构建、状态栏。
+- [x] 新增 `ResearchFlowPanel.vue`，把“今日笔记 / 周报 / 证据索引 / 论文大纲 / 审阅清单”作为编辑区左侧第一入口。
+- [x] 文档区顶部新增研究记录快捷入口：日、周、证、纲，保持每日笔记在文档区域，而不是散落到写作工具页。
+- [x] Store 新增结构化研究文件生成能力：`createWeeklyReport`、`createEvidenceIndex`、`createPaperOutline`、`openReviewSummary`。
+- [x] 每日笔记模板升级为结构化研究记录，包含 YAML metadata、实验/图表、文献、论文结论、证据、风险和明日计划。
+- [x] 周报、证据索引、论文大纲默认生成到稳定路径，便于后续 AI 索引和检索。
+- [x] 交互层重新明确：文档区负责材料入口，编辑区左侧负责研究/大纲/文献/片段，右侧预览区负责导出和审阅，最右设置区负责环境和构建。
+- [x] 新增架构文档 `docs/ARCHITECTURE_RESEARCH_WORKBENCH.md`，记录后续拆分方向和交互放置规则。
 
-### A. 项目工具统一入口
+---
 
-- [x] 编辑区 topbar 新增“项目工具”入口。
-- [x] 新增 `ProjectToolsPanel.vue`，把模板、导出配置、文献集成、写作工具、发布框架和长期路线集中到一个可扩展面板。
-- [x] 新增 `src/services/templates.ts`，统一维护内置模板、导出 profile 和未来功能框架定义。
-- [x] 保持现有补全、批注、预览、构建、导出功能兼容。
+# P0：上线前必须完成
 
-### B. 模板系统基础
+## P0.1 数据安全与稳定性
 
-- [x] 内置 `LaTeX 基础论文` 模板：`main.tex`、`chapters/`、`refs.bib`、`figures/`。
-- [x] 内置 `Markdown + Pandoc 论文` 模板：`paper.md`、`refs.bib`、`figures/`。
-- [x] 内置 `Beamer 演示文稿` 模板：`slides.md`。
-- [x] 模板可以写入当前工作区的子目录，并自动打开主文件。
-- [ ] 用户模板目录：从本地文件夹读取 `template.json`。
-- [ ] 模板市场/模板管理器：导入、删除、更新用户模板。
-- [ ] 内置 ACM、IEEE、Springer、中文学位论文等真实模板包。
+- [ ] 自动保存策略：编辑文本按文件节流保存草稿，崩溃后可恢复。
+- [ ] 快照升级：`.paper-notes/snapshots/` 不只写 manifest，还要复制文本文件、批注、refs.bib 和关键配置。
+- [ ] 启动恢复：检测上次未正常关闭时，提示恢复未保存文档。
+- [ ] 删除/覆盖保护：模板写入、文件删除、重命名、移动必须有冲突检测和撤销/备份方案。
+- [ ] 大文件保护：超过阈值的 PDF、图片、日志不得写入持久化 appState。
+- [ ] 批注锚点迁移：源码变动后标记不稳定锚点，并在批注侧栏提示需要人工校准。
 
-### C. 导出配置 Profile 框架
+## P0.2 外部依赖检测与配置
 
-- [x] 新增默认导出 profile 列表：PDF、DOCX、HTML、Beamer。
-- [x] 当前可从项目工具面板触发 Pandoc 导出。
-- [ ] 将 profile 保存到 `.paper-notes/export-profiles.json`。
-- [ ] 每个 profile 支持模板、CSL、bibliography、pdf-engine、自定义参数。
-- [ ] 不同目标记住上次导出路径。
+- [ ] 新增“环境检查”面板：Pandoc、XeLaTeX、latexmk、synctex、Git。
+- [ ] 支持手动选择 `pandoc.exe` / `xelatex.exe` / `latexmk.exe` 路径，避免依赖 PATH。
+- [ ] 构建失败时给出可操作诊断：缺依赖、路径错误、模板缺文件、BibTeX 错误、字体缺失。
+- [ ] Windows/macOS/Linux 分别给出安装提示和检测命令。
+- [ ] 将 PDF 渲染分辨率、构建命令、Pandoc profile 持久化到本地设置。
 
-### D. 写作工具框架
+## P0.3 首次启动与核心工作流
 
-- [x] 项目工具中显示当前文件字数/行数统计。
-- [x] 一键创建/打开每日笔记：`notes/daily/YYYY-MM-DD.md`。
-- [x] 一键创建轻量快照 manifest：`.paper-notes/snapshots/<time>/manifest.md`。
-- [ ] 每日写作目标：`.paper-notes/writing-stats.jsonl`。
-- [ ] 日历热力图。
-- [ ] 保存时自动快照，快照包含文件内容并支持恢复。
+- [ ] 首次启动引导：选择“写论文 / 做研究记录 / 审阅 PDF / 写周报”。
+- [ ] 示例工作区：内置一个可编译的 Markdown + LaTeX + PDF 批注示例项目。
+- [ ] 打开文件夹后自动识别项目类型：论文项目、笔记项目、普通文件夹、单文件。
+- [ ] 文档区快捷入口在无工作区时给出引导，而不是报错。
+- [ ] “研究流”面板支持一键打开最近的每日笔记、最近周报和证据索引。
 
-### E. 文献管理和外部生态框架
+## P0.4 交互设计打磨
 
-- [x] 在项目工具中新增 Zotero / Better BibTeX 框架说明入口。
-- [x] 在项目工具中新增 DOI / ISBN / URL 导入框架说明入口。
-- [ ] 设置 Better BibTeX 自动导出的 `.bib` 路径。
+- [ ] 文档树、模板栏、编辑侧栏、预览栏、批注栏宽度持久化。
+- [ ] 编辑侧栏为不同面板记忆宽度：研究流 340px、大纲 280px、文献 360px、片段 320px。
+- [ ] 支持侧栏最小化为仅图标竖条。
+- [ ] 打开文件、跳转大纲、SyncTeX 反向定位后，左侧文档树必须展开并选中对应文件。
+- [ ] 顶部工具栏只保留全局动作：文档树、模板、提交、预览、设置；日常写作动作放到文档区和编辑侧栏。
+- [ ] 预览顶部集中放置导出、查看 PDF、批注开关；不要再出现分散的构建 PDF 控件。
+
+## P0.5 模板正确性
+
+- [ ] 每个内置模板只能对应一个明确的官方期刊/会议/学校模板。
+- [ ] 模板必须标记来源、版本、许可证、上游链接和最后核对日期。
+- [ ] 找不到公开可复用官方模板的，不加入内置模板。
+- [ ] ISPRS 模板保留官方 `isprs.cls`、`isprs.bst` vendor 文件，不进行不必要改写。
+- [ ] 每个模板增加 smoke test：创建项目、编译 PDF、引用 refs.bib、插图路径检查。
+
+## P0.6 测试与发布前质量门槛
+
+- [ ] 自动化测试项目：单文件 TeX、多文件 TeX、Markdown + Pandoc、PDF 批注、Markdown 批注、图片预览、BibTeX 跳转。
+- [ ] E2E 测试：打开文件夹、创建每日笔记、生成周报、生成证据索引、导出 PDF。
+- [ ] 构建测试：`npm run build`、`npm run test`、`npm run tauri:build`。
+- [ ] 错误日志导出：用户可一键导出 app state、构建日志、依赖检测结果和系统信息。
+
+---
+
+# P1：内测增长关键
+
+## P1.1 研究记录闭环
+
+- [ ] 每日笔记支持自动插入当前文件、当前批注、最近图表、最近 BibTeX 条目。
+- [ ] 周报生成时自动扫描 `notes/daily/*.md`，汇总本周完成、证据、风险、下周计划。
+- [ ] 证据索引自动从每日笔记、周报、批注、BibTeX、图片路径中提取候选条目。
+- [ ] 论文大纲从证据索引生成章节草稿，并列出每节缺失证据。
+- [ ] 研究流面板显示每一步是否已完成、最近更新时间和缺失项。
+
+## P1.2 批注审阅流
+
+- [ ] 批注列表支持按状态、章节、类型、锚点稳定性筛选。
+- [ ] 批注可转为修改任务，并在源码对应行显示任务标记。
+- [ ] 批注导出支持 Markdown、JSONL、CSV、LaTeX todonotes。
+- [ ] 批注解决后记录修改版本和解决说明。
+- [ ] PDF 文本选中、区域批注、源码批注统一进入 `.paper-notes/review-items.jsonl`。
+
+## P1.3 论文工程体验
+
+- [ ] LaTeX 日志解析增强：undefined reference/citation、overfull hbox、缺包、字体、路径栈。
+- [ ] 大纲搜索、过滤、折叠状态持久化。
+- [ ] 当前章节随光标滚动自动居中。
+- [ ] `\label{}` 跳转到引用列表。
+- [ ] includegraphics hover 支持 PDF 首页缩略图。
+- [ ] BibTeX 卡片/表格视图支持新增、编辑、删除字段。
+
+## P1.4 本地设置和项目设置
+
+- [ ] `.paper-notes/project.json` 保存项目类型、主文件、导出 profile、依赖路径和研究流文件路径。
+- [ ] `.paper-notes/export-profiles.json` 保存 PDF / DOCX / HTML / EPUB / Beamer 参数。
+- [ ] 设置页拆分为：环境、Git、作者、PDF、导出、隐私。
+- [ ] 支持从项目设置中指定主 TeX 文件和主 Markdown 文件。
+
+---
+
+# P2：差异化增强
+
+## P2.1 证据驱动 AI 写作
+
+- [ ] 本地索引 Markdown、TeX、BibTeX、PDF 批注、review-items、evidence-index。
+- [ ] AI 回答必须显示来源文件、行号、批注 ID 或 BibTeX key。
+- [ ] 生成论文段落时附“使用证据”和“缺失证据”。
+- [ ] AI 修改源码必须先生成 diff，用户确认后应用。
+- [ ] 支持“不要凭空写，只使用我的证据库”模式。
+
+## P2.2 论文素材池
+
+- [ ] 建立统一素材视图：结论、图表、表格、公式、文献、批注、实验记录。
+- [ ] 图片和表格可标注用途：引言图、方法图、结果图、消融表、补充材料。
+- [ ] 素材可拖入 Markdown/LaTeX，并自动生成引用、caption 和路径。
+- [ ] 检查论文中未引用图片、未使用 BibTeX、重复 label。
+
+## P2.3 文献生态
+
+- [ ] Zotero / Better BibTeX 自动导出的 `.bib` 路径配置。
 - [ ] 监听外部 `.bib` 变化并刷新索引。
 - [ ] `Ctrl/Cmd+Shift+R` 引用搜索弹窗。
 - [ ] CrossRef DOI 查询、ISBN 查询、URL 元数据抓取。
 - [ ] 自动写入 `refs.bib` 并生成 citation key。
 
-### F. 发布、图表和 PDF 笔记框架
+## P2.4 版本与历史
 
-- [x] 项目工具中新增 Hugo/Jekyll 发布框架说明入口。
-- [x] 项目工具中新增 Beamer 导出入口。
-- [x] 项目工具中新增 Mermaid/Plotly/TikZ 可视化预览框架说明入口。
-- [x] 项目工具中新增 PDF 批注数据库/笔记互联框架说明入口。
-- [ ] Hugo/Jekyll 发布 profile、资源复制、frontmatter 转换。
-- [ ] Mermaid/Plotly 稳定渲染和 TikZ 外部编译缓存。
-- [ ] PDF 批注转 Markdown 引用块。
-- [ ] 批注导出 todonotes / CSV / 按章节整理笔记。
+- [ ] Git 历史面板支持 log、diff、tag、恢复文件。
+- [ ] 本地快照支持 diff、恢复、命名和删除。
+- [ ] 论文版本快照：草稿版、导师反馈版、投稿版、返修版。
 
-## v0.8.0 已完成：剩余功能分批集成与框架落地
+---
 
-### A. 编辑与 LaTeX 智能
+# P3：生态扩展
 
-- [x] 保留 `Ctrl/Cmd+C` 选区复制；仅在没有选区时复制当前整行，保持 VS Code 复制逻辑。
-- [x] 继续保留 `\cite{}`、`\ref{}`、`\input{}`、`\includegraphics{}` 补全和跳转。
-- [x] 新增 Snippet 补全源：LaTeX `fig/table/eq/align/algo/theorem`，Markdown `/figure`、`/table`、`/todo`、`/note`。
-- [x] 编辑区新增“片段”面板，可查看内置片段内容和触发词。
-- [x] LaTeX / Markdown 公式 hover 预览框架：悬停 `$...$`、`$$...$$`、`equation/align` 环境时用 KaTeX 渲染。
-- [x] 当前文件字数/行数统计显示在编辑区 topbar。
+## P3.1 发布与多格式输出
 
-### B. 编译错误与问题面板
+- [ ] Hugo / Jekyll 发布 profile、资源复制、frontmatter 转换。
+- [ ] DOCX 模板、CSL、bibliography、reference-doc 参数配置。
+- [ ] 投稿包导出：源码、图片、bib、cls/sty/bst、README、编译说明。
+- [ ] Beamer 演示文稿模板和 Markdown → Beamer 工作流完善。
 
-- [x] 新增底部“问题 / 输出 / 日志”面板。
-- [x] 问题面板合并静态索引 diagnostics 与构建日志 diagnostics。
-- [x] 点击问题项尝试跳转到对应文件和行。
-- [x] 输出页显示当前构建命令；日志页显示完整构建日志。
-- [ ] LaTeX 日志解析仍为基础能力；后续继续细化 overfull hbox、undefined reference/citation、多文件 include 路径栈。
+## P3.2 可视化与插件
 
-### C. BibTeX 管理
-
-- [x] 新增“参考文献”侧栏面板。
-- [x] 支持搜索 BibTeX key、作者、标题、年份、来源。
-- [x] 点击条目跳转到 `.bib` 对应行。
-- [x] 保留 cite key hover 和右下角 BibTeX 预览。
-- [ ] BibTeX 卡片编辑、字段表格编辑、删除/新增条目尚为后续细化。
-
-### D. Pandoc 多格式导出
-
-- [x] 新增 Markdown 多格式导出面板。
-- [x] Rust 后端新增 `export_markdown_pandoc` 命令。
-- [x] 支持通过系统保存文件框导出：PDF、DOCX、HTML、EPUB、LaTeX、Beamer PDF。
-- [x] 导出继续复用 Markdown fenced block 到 LaTeX 的预处理链路。
-- [ ] DOCX 模板、CSL、bibliography 参数组合后续通过 export profile 实现。
-
-## v0.7.0 已完成：Markdown + LaTeX 混合写作
-
-- [x] Markdown `$...$` / `$$...$$` KaTeX 实时渲染。
-- [x] Markdown fenced block 支持 `figure/table/algorithm/theorem`。
-- [x] Markdown → LaTeX → PDF Pandoc 编译链路。
-- [x] Pandoc 错误基础定位到 Markdown 源码行。
-
-## v0.6.x 已完成：LaTeX 智能写作
-
-- [x] 项目索引器、大纲、依赖图基础。
-- [x] 当前文件大纲面板。
-- [x] `\cite{}` / `\ref{}` / `\input{}` / `\includegraphics{}` 补全。
-- [x] 断链检测：不存在的 label、citation、input、graphics。
-- [x] 重复 label / BibTeX key 检测。
-- [x] hover 显示 label / cite / 图片预览。
-- [x] 图片路径相对于当前 `.tex` 文件目录、figure/figures 目录解析。
-
-## 后续高优先级 TODO
-
-### P0：稳定性和产品化
-
-- [ ] 把 `appStore.ts` 拆成 `workspaceStore/editorStore/previewStore/annotationStore/buildStore/settingsStore`。
-- [ ] 把 `PdfPreview.vue` 拆成 `PdfToolbar/PdfPage/PdfTextSelection/PdfAnnotationOverlay/PdfSyncController`。
-- [ ] 给 Pandoc 路径增加设置项，支持手动选择 `pandoc.exe`，避免依赖 PATH。
-- [ ] 为 Windows/macOS/Linux 增加外部依赖检查面板：Pandoc、XeLaTeX、latexmk、synctex、Git。
-- [ ] 增加自动化测试项目样例：单文件 tex、多文件 tex、Markdown + Pandoc、PDF 批注、Markdown 批注。
-
-### P1：写作增强
-
-- [ ] 大纲搜索与过滤。
-- [ ] 当前章节随光标滚动自动居中。
-- [ ] 大纲拖拽调整章节结构。
-- [ ] 大纲折叠状态按文件持久化。
-- [ ] `\label{}` 跳转到引用列表。
-- [ ] includegraphics hover 支持 PDF 首页缩略图。
-- [ ] BibTeX 卡片/表格视图的增删改。
+- [ ] Mermaid 稳定渲染。
+- [ ] Plotly 图表预览。
+- [ ] TikZ 外部编译缓存。
 - [ ] 自定义 snippets 和 Tab 占位符跳转。
+- [ ] 插件 API 草案：文件索引、编辑器命令、预览扩展、导出 profile。
 
-### P2：论文工程能力
+## P3.3 协作与同步
 
-- [ ] 底部问题面板增强 LaTeX 日志解析。
-- [ ] Git 历史面板：log、diff、tag、恢复文件。
-- [ ] 本地自动快照：保存时写入完整 `.paper-notes/snapshots/`。
-- [ ] 批注导出 todonotes / JSONL / CSV。
-- [ ] 批注转 Markdown 引用块。
+- [ ] GitHub Pull/Push 冲突可视化处理。
+- [ ] 批注作者和回复流增强。
+- [ ] 共享审阅包：导出 PDF + review-items + 源码上下文。
+- [ ] 云同步作为可选能力，不影响本地优先路线。
 
-### P3：外部生态
+---
 
-- [ ] Zotero / Better BibTeX 连接。
-- [ ] DOI / ISBN / URL 导入 BibTeX。
-- [ ] 导出 profile：PDF / DOCX / HTML / EPUB / Beamer。
-- [ ] Hugo / Jekyll 博客发布。
-- [ ] Mermaid / Plotly / TikZ 实时预览。
-- [ ] 字数目标、每日笔记、日历热力图。
+# 已完成历史摘要
 
-## v0.9.1 完成：编辑侧栏统一和可调整宽度
+## v0.9.9
 
-- [x] 将大纲、参考文献、片段、导出、项目工具入口统一移动到编辑区左侧按钮组。
-- [x] 所有编辑相关侧栏统一显示在编辑区左侧，与大纲同一位置。
-- [x] 新增编辑侧栏拖拽条，可通过鼠标调整侧栏宽度。
-- [x] 保留右侧预览栏和批注栏原有交互，不再让编辑工具按钮分散在编辑区右侧。
+- [x] 导出入口移动到预览顶部。
+- [x] 打开文件后文档树对应展开和选中。
+- [x] 模板栏移动到文档树旁边。
+- [x] 内置 ISPRS `cls` / `bst` vendor 文件。
 
-后续待优化：
+## v0.9.3 - v0.9.8
 
-- [ ] 将编辑侧栏宽度持久化到本地设置。
-- [ ] 为不同侧栏记忆独立宽度，例如大纲 260px、项目工具 380px。
-- [ ] 支持侧栏最小化为仅图标竖条。
+- [x] 模板注册表拆分到 `src/templates/`。
+- [x] CSUthesis、ISPRS 等模板入口和 vendor 框架。
+- [x] 编辑侧栏统一移动到大纲旁边，并支持拖拽宽度。
+- [x] PDF 预览与导出入口初步整理。
 
-## v0.9.3 完成：模板注册表与 CSUthesis 内置骨架
+## v0.8.0
 
-- [x] 将模板从单个 `services/templates.ts` 拆到 `src/templates/`，形成类型、注册表、模板工厂三层结构。
-- [x] 新增 CSUthesis 中南大学研究生学位论文模板入口，内置主文件、content 分章、README、latexmkrc、Makefile、BibTeX 示例和轻量兼容 `CSUthesis.cls`。
-- [x] LaTeX 构建支持识别 `% !TEX program = xelatex`，并在 fallback 时使用相同引擎。
-- [x] 模板 UI 显示 provider 和 tags，便于后续模板库扩展。
-- [ ] 后续接入完整上游 vendor 包，并保留上游 LICENSE/NOTICE。
-- [ ] 增加模板变量创建向导与模板校验单元测试。
+- [x] 片段、问题面板、BibTeX 管理、Pandoc 多格式导出框架。
+
+## v0.7.0
+
+- [x] Markdown + LaTeX 混合写作、KaTeX、Pandoc 编译链路。
+
+## v0.6.x
+
+- [x] LaTeX 项目索引、大纲、依赖图、补全、跳转和基础诊断。

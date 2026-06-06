@@ -2,10 +2,20 @@
 import type { GitStatusEntry } from '../types/app';
 const props = defineProps<{ entries: GitStatusEntry[]; local?: boolean }>();
 const emit = defineEmits<{ close: [] }>();
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 </script>
 <template>
   <section class="side-work-panel history-panel">
-    <header class="side-work-panel-header">
+    <header class="side-work-panel-header" title="双击关闭" @dblclick="onHeaderDblclick">
       <div>
         <h3>历史</h3>
         <small>{{ props.local ? '本地快照框架已预留；Git 历史后续增强。' : '当前变更列表' }}</small>

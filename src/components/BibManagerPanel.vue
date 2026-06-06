@@ -14,11 +14,21 @@ const filtered = computed(() => {
     .toLowerCase()
     .includes(q));
 });
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 </script>
 
 <template>
   <section class="side-work-panel bib-manager-panel">
-    <header class="side-work-panel-header">
+    <header class="side-work-panel-header" title="双击关闭" @dblclick="onHeaderDblclick">
       <div>
         <h3>参考文献</h3>
         <small>{{ filtered.length }} / {{ entries.length }} 条</small>

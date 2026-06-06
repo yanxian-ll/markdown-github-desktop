@@ -50,6 +50,7 @@ import type {
   PdfSyncPoint,
   TexSourcePoint,
   PersistedAppState,
+  MarkdownRenderPreset,
 } from "../types/app";
 import type {
   BibEntryItem,
@@ -242,6 +243,24 @@ function targetDirectoryFromNode(node?: FileNode): string {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function formatLocalDate(date: Date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isoWeekLabel(date: Date) {
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayNumber = (target.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNumber + 3);
+  const firstThursday = new Date(target.getFullYear(), 0, 4);
+  const firstDayNumber = (firstThursday.getDay() + 6) % 7;
+  firstThursday.setDate(firstThursday.getDate() - firstDayNumber + 3);
+  const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * 24 * 60 * 60 * 1000));
+  return `${target.getFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
 function makeAnnotationMessage(
@@ -688,6 +707,7 @@ export const useAppStore = defineStore("app", () => {
   const pdfPreviewPath = ref<string>("");
   const pdfSyncPoint = ref<PdfSyncPoint | null>(null);
   const pdfRenderQuality = ref(0.72);
+  const markdownRenderPreset = ref<MarkdownRenderPreset>("default");
   const editorGotoLine = ref<number | null>(null);
   const markdownPreviewLine = ref<number | null>(null);
   const editorCursorLine = ref<number | null>(null);
@@ -859,6 +879,7 @@ export const useAppStore = defineStore("app", () => {
         gitPanelVisible: gitPanelVisible.value,
         pdfPanelVisible: true,
         pdfRenderQuality: pdfRenderQuality.value,
+        markdownRenderPreset: markdownRenderPreset.value,
       },
     };
   }
@@ -948,6 +969,10 @@ export const useAppStore = defineStore("app", () => {
         1.25,
         Math.max(0.45, initial.editor?.pdfRenderQuality ?? 0.72),
       );
+      const savedMarkdownPreset = initial.editor?.markdownRenderPreset;
+      markdownRenderPreset.value = ["default", "academic", "compact", "reading", "manuscript"].includes(savedMarkdownPreset || "")
+        ? (savedMarkdownPreset as MarkdownRenderPreset)
+        : "default";
       githubToken.value = await getSecret(GITHUB_TOKEN_ACCOUNT);
       githubUserHint.value = githubToken.value ? "已保存 token" : "";
       if (workspace.value?.localDir) {
@@ -2483,28 +2508,259 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  async function createDailyNote() {
+  async function openOrCreateWorkspaceMarkdown(
+    displayPath: string,
+    createContent: () => string,
+    labels: { created: string; opened: string },
+  ) {
     if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const displayPath = `notes/daily/${yyyy}-${mm}-${dd}.md`;
     const existing = findNodeByPath(fileTree.value, displayPath);
     if (!existing) {
-      const content = `# ${yyyy}-${mm}-${dd} 写作记录\n\n## 今日目标\n\n- [ ] \n\n## 编辑记录\n\n- 当前文件：${activeDocument.value?.relativePath || activeDocument.value?.title || '未打开'}\n\n## 批注与待办\n\n- \n`;
-      await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), content);
+      await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), createContent());
       await refreshWorkspace();
     }
     const node = findNodeByPath(fileTree.value, displayPath) || {
-      name: `${yyyy}-${mm}-${dd}.md`,
+      name: titleFromPath(displayPath),
       path: displayPath,
       kind: 'file' as const,
       documentKind: 'markdown' as const,
       children: [],
     };
     await openWorkspaceFile(node);
-    status.value = existing ? `已打开每日笔记：${displayPath}` : `已创建每日笔记：${displayPath}`;
+    status.value = existing ? `${labels.opened}：${displayPath}` : `${labels.created}：${displayPath}`;
+  }
+
+  async function createDailyNote() {
+    const now = new Date();
+    const dateLabel = formatLocalDate(now);
+    const displayPath = `notes/daily/${dateLabel}.md`;
+    await openOrCreateWorkspaceMarkdown(
+      displayPath,
+      () => `---
+type: daily-note
+date: ${dateLabel}
+project: ${workspace.value?.repo || ''}
+tags: [research-log]
+related_files:
+  - ${activeDocument.value?.relativePath || ''}
+claims: []
+evidence: []
+---
+
+# ${dateLabel} 研究记录
+
+## 今日目标
+
+- [ ] 
+
+## 工作记录
+
+- 当前文件：${activeDocument.value?.relativePath || activeDocument.value?.title || '未打开'}
+- 
+
+## 实验 / 数据 / 图表
+
+| 项目 | 文件或路径 | 结论 | 是否可写入论文 |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+## 阅读文献
+
+- 
+
+## 可能进入论文的结论
+
+- 结论：
+  - 证据：
+  - 可信度：待验证 / 可用 / 已确认
+
+## 问题与风险
+
+- 
+
+## 明日计划
+
+- [ ] 
+`,
+      { created: '已创建每日笔记', opened: '已打开每日笔记' },
+    );
+  }
+
+  async function createWeeklyReport() {
+    const now = new Date();
+    const weekLabel = isoWeekLabel(now);
+    const displayPath = `notes/weekly/${weekLabel}.md`;
+    await openOrCreateWorkspaceMarkdown(
+      displayPath,
+      () => `---
+type: weekly-report
+week: ${weekLabel}
+project: ${workspace.value?.repo || ''}
+source_pattern: notes/daily/*.md
+---
+
+# ${weekLabel} 周报
+
+## 本周完成
+
+- 
+
+## 本周关键证据
+
+| 结论 | 证据来源 | 相关文件 | 可进入论文位置 |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+## 本周阅读与参考文献
+
+- 
+
+## 论文推进
+
+- 摘要：
+- 引言：
+- 方法：
+- 实验：
+- 结果：
+- 讨论：
+
+## 风险与待验证内容
+
+- 
+
+## 下周计划
+
+- [ ] 
+`,
+      { created: '已创建周报', opened: '已打开周报' },
+    );
+  }
+
+  async function createEvidenceIndex() {
+    const displayPath = 'research/evidence-index.md';
+    await openOrCreateWorkspaceMarkdown(
+      displayPath,
+      () => `---
+type: evidence-index
+project: ${workspace.value?.repo || ''}
+updated_at: ${nowIso()}
+---
+
+# 论文证据索引
+
+> 目标：让 AI 和人工审阅都能知道每个论文结论来自哪里，而不是凭空生成。
+
+## 结论与证据矩阵
+
+| 论文结论 / Claim | 证据来源 | 文件 / 数据 / 图表 | 支持文献 | 缺失项 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+|  | notes/daily/ |  |  |  | 待验证 |
+
+## 图表候选
+
+| 图表 | 来源文件 | 对应章节 | 需要补充 |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+## 文献证据
+
+- 当前 BibTeX 条目数：${latexIndex.value.citations.length}
+- 需要补充的引用：
+
+## 批注与审阅证据
+
+- 当前未处理批注：${annotations.value.filter((item) => item.status === 'open').length}
+- 批注任务文件：.paper-notes/review-items.jsonl
+`,
+      { created: '已创建证据索引', opened: '已打开证据索引' },
+    );
+  }
+
+  async function createPaperOutline() {
+    const displayPath = 'paper/paper-outline.md';
+    await openOrCreateWorkspaceMarkdown(
+      displayPath,
+      () => `---
+type: paper-outline
+project: ${workspace.value?.repo || ''}
+evidence_index: research/evidence-index.md
+---
+
+# 论文大纲
+
+## 题目候选
+
+1. 
+2. 
+3. 
+
+## 核心问题
+
+- 研究问题：
+- 为什么重要：
+- 现有方法不足：
+
+## 贡献点
+
+1. 
+2. 
+3. 
+
+## 章节结构
+
+### 1. Introduction
+
+- 背景：
+- 问题：
+- 贡献：
+- 证据来源：
+
+### 2. Related Work
+
+- 主题分组：
+- 当前 BibTeX 条目数：${latexIndex.value.citations.length}
+
+### 3. Method
+
+- 方法概述：
+- 关键公式 / 模块：
+- 图示候选：
+
+### 4. Experiments
+
+- 数据集：
+- Baseline：
+- Ablation：
+- 指标：
+
+### 5. Results and Discussion
+
+- 主要结果：
+- 失败案例：
+- 局限性：
+
+## 待补证据
+
+- [ ] 
+`,
+      { created: '已创建论文大纲', opened: '已打开论文大纲' },
+    );
+  }
+
+  async function openReviewSummary() {
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
+    const displayPath = '.paper-notes/review-summary.md';
+    await writeWorkspaceFile(workspace.value.localDir, displayPath, serializeReviewSummary(annotations.value));
+    await refreshWorkspace();
+    const node = findNodeByPath(fileTree.value, displayPath) || {
+      name: titleFromPath(displayPath),
+      path: displayPath,
+      kind: 'file' as const,
+      documentKind: 'markdown' as const,
+      children: [],
+    };
+    await openWorkspaceFile(node);
+    status.value = `已打开审阅清单：${displayPath}`;
   }
 
   async function createLocalSnapshot() {
@@ -2540,6 +2796,14 @@ export const useAppStore = defineStore("app", () => {
       Math.max(0.45, Number(value) || 0.72),
     );
     status.value = `PDF 预览分辨率：${Math.round(pdfRenderQuality.value * 100)}%`;
+    await persist();
+  }
+
+
+  async function setMarkdownRenderPreset(value: MarkdownRenderPreset) {
+    const allowed: MarkdownRenderPreset[] = ["default", "academic", "compact", "reading", "manuscript"];
+    markdownRenderPreset.value = allowed.includes(value) ? value : "default";
+    status.value = `Markdown 渲染风格：${markdownRenderPreset.value}`;
     await persist();
   }
 
@@ -2583,6 +2847,7 @@ export const useAppStore = defineStore("app", () => {
     pdfPreviewPath,
     pdfSyncPoint,
     pdfRenderQuality,
+    markdownRenderPreset,
     editorGotoLine,
     markdownPreviewLine,
     editorCursorLine,
@@ -2632,6 +2897,7 @@ export const useAppStore = defineStore("app", () => {
     openCurrentPdf,
     loadPdfPreview,
     setPdfRenderQuality,
+    setMarkdownRenderPreset,
     createPdfAnnotation,
     createMarkdownPreviewAnnotation,
     createSourceAnnotation,
@@ -2642,6 +2908,10 @@ export const useAppStore = defineStore("app", () => {
     exportMarkdownFormat,
     createProjectFromTemplate,
     createDailyNote,
+    createWeeklyReport,
+    createEvidenceIndex,
+    createPaperOutline,
+    openReviewSummary,
     createLocalSnapshot,
     removeAnnotation,
     focusAnnotation,

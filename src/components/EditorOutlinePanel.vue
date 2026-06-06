@@ -166,11 +166,21 @@ const OutlineNode: any = defineComponent({
     };
   },
 });
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 </script>
 
 <template>
   <aside class="editor-outline-panel">
-    <header class="editor-outline-header">
+    <header class="editor-outline-header" title="双击关闭大纲" @dblclick="onHeaderDblclick">
       <div>
         <strong>大纲</strong>
         <small>{{ active?.relativePath || '当前文档' }}</small>

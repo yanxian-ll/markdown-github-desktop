@@ -11,9 +11,20 @@ const props = defineProps<{
 const emit = defineEmits<{
   openDiagnostic: [payload: { file: string; line: number }];
   close: [];
+  resizeStart: [event: MouseEvent];
 }>();
 
 const tab = ref<'problems' | 'output' | 'log'>('problems');
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 const buildDiagnostics = computed(() => props.latexResult?.diagnostics || []);
 const allProblems = computed(() => [
   ...props.diagnostics.map((item) => ({
@@ -35,7 +46,8 @@ const allProblems = computed(() => [
 
 <template>
   <section class="bottom-panel build-panel">
-    <div class="bottom-panel-header">
+    <div class="bottom-panel-resize-grip" title="拖动调整日志面板高度" @mousedown="emit('resizeStart', $event)" />
+    <div class="bottom-panel-header" title="双击关闭日志栏" @dblclick="onHeaderDblclick">
       <div class="bottom-panel-tabs">
         <button :class="{ active: tab === 'problems' }" @click="tab = 'problems'">问题 {{ allProblems.length }}</button>
         <button :class="{ active: tab === 'output' }" @click="tab = 'output'">输出</button>

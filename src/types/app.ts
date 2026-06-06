@@ -212,6 +212,8 @@ export interface PaperReviewItem {
   updated_at: string;
 }
 
+export type MarkdownRenderPreset = "default" | "academic" | "compact" | "reading" | "manuscript";
+
 export interface PersistedAppState {
   documents: MarkdownDocument[];
   activeDocumentId?: string;
@@ -228,5 +230,6 @@ export interface PersistedAppState {
     gitPanelVisible: boolean;
     pdfPanelVisible: boolean;
     pdfRenderQuality?: number;
+    markdownRenderPreset?: MarkdownRenderPreset;
   };
 }

@@ -16,8 +16,10 @@ import SnippetPanel from './components/SnippetPanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
 import WelcomeStart from './components/WelcomeStart.vue';
 import TemplateGallery from './components/TemplateGallery.vue';
+import ResearchFlowPanel from './components/ResearchFlowPanel.vue';
 import { useAppStore } from "./stores/appStore";
 import type { DocumentKind, FileNode, PaperAnnotationRect } from "./types/app";
+import type { ResearchFlowActionId } from './config/workbench';
 
 const store = useAppStore();
 const {
@@ -43,8 +45,10 @@ const {
   pdfPreviewUrl,
   pdfSyncPoint,
   pdfRenderQuality,
+  markdownRenderPreset,
   editorGotoLine,
   editorCursorLine,
+  annotations,
   markdownPreviewLine,
   activeAnnotationId,
   visibleAnnotations,
@@ -65,6 +69,7 @@ const activeText = computed({
   set: (value: string) => store.updateActiveText(value),
 });
 
+const editorPaneVisible = ref(true);
 const activeKind = computed(() => activeDocument.value?.kind);
 const editorAreaVisible = computed(
   () => activeKind.value !== "image" && activeKind.value !== "pdf",
@@ -78,8 +83,11 @@ const previewOnlyDocument = computed(
 const effectivePreviewVisible = computed(
   () => previewCapable.value && (previewVisible.value || previewOnlyDocument.value),
 );
+const effectiveEditorVisible = computed(
+  () => editorAreaVisible.value && (editorPaneVisible.value || !effectivePreviewVisible.value),
+);
 const splitLayoutActive = computed(
-  () => editorAreaVisible.value && effectivePreviewVisible.value,
+  () => effectiveEditorVisible.value && effectivePreviewVisible.value,
 );
 const annotationPanelAvailable = computed(() =>
   ["markdown", "latex", "pdf"].includes(activeKind.value || ""),
@@ -110,6 +118,7 @@ const activeDiagnosticErrorCount = computed(() => activeDocumentDiagnostics.valu
 const explorerWidth = ref(280);
 const settingsWidth = ref(360);
 const previewWidth = ref(560);
+const bottomPanelHeight = ref(260);
 const imageZoom = ref(1);
 const markdownPdfPreviewMode = ref(false);
 const previewExportMenuVisible = ref(false);
@@ -117,12 +126,12 @@ const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
 const editorSidePanelWidth = ref(280);
 const editorOutlineVisible = ref(false);
-const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'history' | null>(null);
+const sideWorkPanel = ref<'workflow' | 'outline' | 'bib' | 'snippets' | 'history' | null>(null);
 const bottomPanelVisible = ref(false);
 const templatePanelVisible = ref(false);
 const templatePanelWidth = ref(340);
 const scratchEditorVisible = ref(false);
-let resizeTarget: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | null =
+let resizeTarget: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom" | null =
   null;
 let annotationResizeRight = 0;
 let editorSideResizeLeft = 0;
@@ -132,7 +141,7 @@ const startPageVisible = computed(() => !hasWorkspace.value && !scratchEditorVis
 const layoutClass = computed(() => ({
   "explorer-hidden": !explorerVisible.value,
   "git-hidden": !gitPanelVisible.value,
-  "preview-hidden": !previewVisible.value,
+  "preview-hidden": !effectivePreviewVisible.value,
   resizing: !!resizeTarget,
 }));
 
@@ -167,6 +176,20 @@ const editorBodyLayoutStyle = computed(() => {
   };
 });
 
+const bottomPanelStyle = computed(() => ({ height: `${bottomPanelHeight.value}px` }));
+const editorHeaderTitle = computed(() => {
+  if (!previewCapable.value || previewOnlyDocument.value) return '编辑栏';
+  return splitLayoutActive.value
+    ? '双击关闭编辑栏，保留预览栏（Ctrl/Cmd+Alt+E）'
+    : '双击打开预览栏，恢复左右双栏（Ctrl/Cmd+Alt+V）';
+});
+const previewHeaderTitle = computed(() => {
+  if (previewOnlyDocument.value) return '预览栏';
+  return splitLayoutActive.value
+    ? '双击关闭预览栏，保留编辑栏（Ctrl/Cmd+Alt+V）'
+    : '双击打开编辑栏，恢复左右双栏（Ctrl/Cmd+Alt+E）';
+});
+
 let imageGestureBaseZoom = 1;
 let persistTimer: number | undefined;
 watch(
@@ -175,6 +198,8 @@ watch(
     previewVisible.value,
     explorerVisible.value,
     gitPanelVisible.value,
+    editorPaneVisible.value,
+    bottomPanelHeight.value,
     activeDocumentId.value,
   ],
   () => {
@@ -191,7 +216,11 @@ watch(
     previewExportMenuVisible.value = false;
     annotationPanelVisible.value = false;
     editorOutlineVisible.value = false;
-    sideWorkPanel.value = null;
+    editorPaneVisible.value = true;
+    if (["markdown", "latex"].includes(activeDocument.value?.kind || "")) {
+      previewVisible.value = true;
+    }
+    if (sideWorkPanel.value !== 'workflow') sideWorkPanel.value = null;
   },
 );
 
@@ -207,7 +236,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function startResize(
-  target: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide",
+  target: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom",
   event: MouseEvent,
 ) {
   resizeTarget = target;
@@ -225,7 +254,7 @@ function startResize(
     editorSideResizeLeft = layout?.getBoundingClientRect().left ?? 0;
   }
   event.preventDefault();
-  document.body.classList.add("drag-resizing");
+  document.body.classList.add("drag-resizing", target === "bottom" ? "drag-resizing-y" : "drag-resizing-x");
 }
 
 function onResizeMove(event: MouseEvent) {
@@ -267,19 +296,21 @@ function onResizeMove(event: MouseEvent) {
       Math.min(620, maxAnnotationWidth),
     );
   } else if (resizeTarget === "editorSide") {
-    const editorRightReserve = previewVisible.value ? previewWidth.value + 220 : 420;
+    const editorRightReserve = effectivePreviewVisible.value ? previewWidth.value + 220 : 420;
     const maxEditorSideWidth = Math.max(260, width - editorSideResizeLeft - editorRightReserve);
     editorSidePanelWidth.value = clamp(
       event.clientX - editorSideResizeLeft,
       220,
       Math.min(560, maxEditorSideWidth),
     );
+  } else if (resizeTarget === "bottom") {
+    bottomPanelHeight.value = clamp(window.innerHeight - event.clientY - 32, 160, Math.min(620, window.innerHeight - 120));
   }
 }
 
 function stopResize() {
   resizeTarget = null;
-  document.body.classList.remove("drag-resizing");
+  document.body.classList.remove("drag-resizing", "drag-resizing-x", "drag-resizing-y");
 }
 
 function zoomImage(delta: number) {
@@ -330,9 +361,40 @@ async function submitGithub() {
   }
 }
 
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
 function togglePreviewPane() {
   if (!previewCapable.value || previewOnlyDocument.value) return;
-  previewVisible.value = !previewVisible.value;
+  if (effectivePreviewVisible.value && effectiveEditorVisible.value) previewVisible.value = false;
+  else previewVisible.value = true;
+}
+
+function toggleEditorPane() {
+  if (!editorAreaVisible.value) return;
+  if (effectiveEditorVisible.value && effectivePreviewVisible.value) editorPaneVisible.value = false;
+  else editorPaneVisible.value = true;
+}
+
+function restoreDualPane() {
+  if (!editorAreaVisible.value || !previewCapable.value || previewOnlyDocument.value) return;
+  editorPaneVisible.value = true;
+  previewVisible.value = true;
+}
+
+function onEditorHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  if (splitLayoutActive.value) editorPaneVisible.value = false;
+  else if (previewCapable.value && !previewOnlyDocument.value) previewVisible.value = true;
+}
+
+function onPreviewHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  if (previewOnlyDocument.value) return;
+  if (splitLayoutActive.value) previewVisible.value = false;
+  else editorPaneVisible.value = true;
 }
 
 async function createItem(parent?: FileNode) {
@@ -473,6 +535,18 @@ async function createDailyNote() {
   }
 }
 
+async function runResearchFlowAction(action: ResearchFlowActionId) {
+  try {
+    if (action === 'daily-note') await store.createDailyNote();
+    else if (action === 'weekly-report') await store.createWeeklyReport();
+    else if (action === 'evidence-index') await store.createEvidenceIndex();
+    else if (action === 'paper-outline') await store.createPaperOutline();
+    else if (action === 'review-summary') await store.openReviewSummary();
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function handleLatexNavigate(payload: { kind: 'label' | 'bib' | 'file'; key: string }) {
   try {
     if (payload.kind === 'label') await store.jumpToLatexLabel(payload.key);
@@ -496,6 +570,18 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault();
     buildLatex();
   }
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === "v") {
+    event.preventDefault();
+    togglePreviewPane();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === "e") {
+    event.preventDefault();
+    toggleEditorPane();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.key === "\\") {
+    event.preventDefault();
+    restoreDualPane();
+  }
 }
 
 onMounted(async () => {
@@ -517,14 +603,12 @@ onBeforeUnmount(() => {
     <Toolbar
       :active="activeDocument"
       :busy="gitBusy"
-      :preview-visible="effectivePreviewVisible"
       :explorer-visible="explorerVisible"
       :git-panel-visible="gitPanelVisible"
       :template-panel-visible="templatePanelVisible"
       :git-dirty-count="gitDirtyCount"
       :github-workspace="workspace?.source !== 'local' && !!workspace?.localDir"
       @submit-github="submitGithub"
-      @toggle-preview="togglePreviewPane"
       @toggle-explorer="explorerVisible = !explorerVisible"
       @toggle-git-panel="gitPanelVisible = !gitPanelVisible"
       @open-templates="templatePanelVisible = !templatePanelVisible"
@@ -548,6 +632,7 @@ onBeforeUnmount(() => {
         @refresh="store.refreshWorkspace"
         @open-local="store.openLocalEntry"
         @daily-note="createDailyNote"
+        @research-action="runResearchFlowAction"
         @hide="explorerVisible = false"
       />
       <div
@@ -584,13 +669,21 @@ onBeforeUnmount(() => {
       <section
         v-else
         class="editor-layout"
-        :class="{ 'preview-hidden': !effectivePreviewVisible, 'editor-hidden': !editorAreaVisible }"
+        :class="{ 'preview-hidden': !effectivePreviewVisible, 'editor-hidden': !effectiveEditorVisible }"
         :style="editorLayoutStyle"
       >
-        <div v-if="editorAreaVisible" class="editor-column">
-          <div class="editor-header">
+        <div v-if="effectiveEditorVisible" class="editor-column">
+          <div class="editor-header pane-header" :title="editorHeaderTitle" @dblclick="onEditorHeaderDblclick">
             <div class="editor-header-left">
               <div class="editor-sidebar-buttons" aria-label="编辑侧栏">
+                <button
+                  class="toolbar-icon research-flow-toggle-button"
+                  :class="{ active: sideWorkPanel === 'workflow' }"
+                  :title="sideWorkPanel === 'workflow' ? '隐藏研究流' : '显示研究流：记录、证据、论文、审阅'"
+                  @click="sideWorkPanel = sideWorkPanel === 'workflow' ? null : 'workflow'"
+                >
+                  研
+                </button>
                 <button
                   v-if="editorOutlineAvailable"
                   class="toolbar-icon outline-toggle-button"
@@ -610,6 +703,15 @@ onBeforeUnmount(() => {
             </div>
             <div class="editor-header-actions">
               <span class="writing-stats-pill" :title="'当前文件统计：' + activeWritingStatsLabel">{{ activeWritingStatsLabel }}</span>
+              <button
+                v-if="previewCapable && !previewOnlyDocument"
+                class="toolbar-icon"
+                :class="{ active: effectivePreviewVisible }"
+                title="切换预览栏（Ctrl/Cmd+Alt+V，双击标题栏也可切换）"
+                @click="togglePreviewPane"
+              >
+                ◫
+              </button>
               <button class="toolbar-icon" :class="{ active: bottomPanelVisible }" title="问题 / 输出 / 日志" @click="bottomPanelVisible = !bottomPanelVisible">⚠</button>
               <span
                 v-if="activeDiagnosticCount"
@@ -627,8 +729,18 @@ onBeforeUnmount(() => {
             :style="editorBodyLayoutStyle"
           >
             <div v-if="sideWorkPanel" class="editor-side-panel-slot">
+              <ResearchFlowPanel
+                v-if="sideWorkPanel === 'workflow'"
+                :active-path="activeDocument?.relativePath || activeDocument?.title"
+                :writing-stats-label="activeWritingStatsLabel"
+                :latex-index="latexIndex"
+                :annotations="annotations"
+                :busy="busy"
+                @action="runResearchFlowAction"
+                @close="sideWorkPanel = null"
+              />
               <EditorOutlinePanel
-                v-if="editorOutlineAvailable && sideWorkPanel === 'outline'"
+                v-else-if="editorOutlineAvailable && sideWorkPanel === 'outline'"
                 :outline="latexIndex.outline"
                 :active="activeDocument"
                 :active-line="editorCursorLine"
@@ -678,9 +790,19 @@ onBeforeUnmount(() => {
           @mousedown="startResize('preview', $event)"
         />
         <div v-if="effectivePreviewVisible" class="preview-column">
-          <div v-if="!pdfPreviewActive" class="preview-header">
+          <div v-if="!pdfPreviewActive" class="preview-header pane-header" :title="previewHeaderTitle" @dblclick="onPreviewHeaderDblclick">
             <span>预览</span>
             <div class="preview-header-actions">
+              <button
+                v-if="editorAreaVisible"
+                class="toolbar-icon preview-action-button icon-only"
+                :class="{ active: effectiveEditorVisible }"
+                title="切换编辑栏（Ctrl/Cmd+Alt+E，双击标题栏也可切换）"
+                aria-label="切换编辑栏"
+                @click="toggleEditorPane"
+              >
+                ✎
+              </button>
               <div v-if="activeDocument?.kind === 'markdown'" class="preview-export-control">
                 <button
                   class="preview-export-button"
@@ -733,6 +855,7 @@ onBeforeUnmount(() => {
                 :annotations="visibleAnnotations"
                 :active-annotation-id="activeAnnotationId"
                 :active-source-line="markdownPreviewLine"
+                :render-preset="markdownRenderPreset"
                 @create-annotation="createMarkdownPreviewAnnotation"
                 @focus-annotation="store.focusAnnotation"
                 @source-click="syncMarkdownEditor"
@@ -756,6 +879,7 @@ onBeforeUnmount(() => {
               @edit-message="store.updateAnnotationMessage"
               @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
+              @close="annotationPanelVisible = false"
             />
           </div>
 
@@ -766,7 +890,7 @@ onBeforeUnmount(() => {
             :style="paperReviewLayoutStyle"
           >
             <div class="markdown-pdf-preview-shell">
-              <div class="markdown-pdf-return-bar">
+              <div class="markdown-pdf-return-bar pane-header" :title="previewHeaderTitle" @dblclick="onPreviewHeaderDblclick">
                 <button class="toolbar-icon" title="返回 Markdown 预览" @click="markdownPdfPreviewMode = false">MD</button>
                 <span>Pandoc PDF</span>
               </div>
@@ -778,6 +902,7 @@ onBeforeUnmount(() => {
                 :active-annotation-id="activeAnnotationId"
                 :annotation-panel-visible="annotationPanelVisible"
                 :annotation-panel-available="annotationPanelAvailable"
+                @topbar-dblclick="onPreviewHeaderDblclick"
                 @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
                 @create-annotation="createPdfAnnotation"
                 @focus-annotation="store.focusAnnotation"
@@ -801,13 +926,14 @@ onBeforeUnmount(() => {
               @edit-message="store.updateAnnotationMessage"
               @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
+              @close="annotationPanelVisible = false"
             />
           </div>
           <div
             v-else-if="activeDocument?.kind === 'image'"
             class="image-preview"
           >
-            <div class="asset-toolbar">
+            <div class="asset-toolbar pane-header" :title="previewHeaderTitle" @dblclick="onPreviewHeaderDblclick">
               <button
                 class="toolbar-icon"
                 title="缩小图片"
@@ -859,6 +985,7 @@ onBeforeUnmount(() => {
               :active-annotation-id="activeAnnotationId"
               :annotation-panel-visible="annotationPanelVisible"
               :annotation-panel-available="annotationPanelAvailable"
+              @topbar-dblclick="onPreviewHeaderDblclick"
               @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
               @reverse-click="syncTexReverse"
               @create-annotation="createPdfAnnotation"
@@ -882,6 +1009,7 @@ onBeforeUnmount(() => {
               @edit-message="store.updateAnnotationMessage"
               @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
+              @close="annotationPanelVisible = false"
             />
           </div>
           <div
@@ -898,6 +1026,7 @@ onBeforeUnmount(() => {
               :active-annotation-id="activeAnnotationId"
               :annotation-panel-visible="annotationPanelVisible"
               :annotation-panel-available="annotationPanelAvailable"
+              @topbar-dblclick="onPreviewHeaderDblclick"
               @toggle-annotation-panel="annotationPanelVisible = !annotationPanelVisible"
               @reverse-click="syncTexReverse"
               @create-annotation="createPdfAnnotation"
@@ -921,6 +1050,7 @@ onBeforeUnmount(() => {
               @edit-message="store.updateAnnotationMessage"
               @export-markdown="store.exportAnnotationsMarkdown"
               @remove="store.removeAnnotation"
+              @close="annotationPanelVisible = false"
             />
           </div>
           <div v-else class="latex-placeholder">
@@ -968,6 +1098,7 @@ onBeforeUnmount(() => {
         :latex-active="isLatexActive"
         :latex-result="latexResult"
         :pdf-render-quality="pdfRenderQuality"
+        :markdown-render-preset="markdownRenderPreset"
         @set-token="store.setGithubToken"
         @forget-token="store.forgetGithubToken"
         @clone="store.cloneWorkspace"
@@ -978,6 +1109,7 @@ onBeforeUnmount(() => {
         @clean-latex="store.cleanLatex"
         @open-pdf="store.openCurrentPdf"
         @update-pdf-render-quality="store.setPdfRenderQuality"
+        @update-markdown-render-preset="store.setMarkdownRenderPreset"
         @hide="gitPanelVisible = false"
       />
     </main>
@@ -986,6 +1118,8 @@ onBeforeUnmount(() => {
       v-if="bottomPanelVisible"
       :diagnostics="activeDocumentDiagnostics"
       :latex-result="latexResult"
+      :style="bottomPanelStyle"
+      @resize-start="startResize('bottom', $event)"
       @open-diagnostic="handleDiagnosticOpen"
       @close="bottomPanelVisible = false"
     />

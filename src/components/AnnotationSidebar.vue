@@ -20,6 +20,7 @@ const emit = defineEmits<{
   reply: [payload: { id: string; body: string }];
   editMessage: [payload: { id: string; messageId: string; body: string }];
   exportMarkdown: [];
+  close: [];
 }>();
 
 type StatusFilter = "all" | PaperAnnotationStatus;
@@ -226,11 +227,21 @@ function editMessage(item: PaperAnnotation, message: PaperAnnotationMessage) {
   if (!body || body === message.body) return;
   emit("editMessage", { id: item.id, messageId: message.id, body });
 }
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 </script>
 
 <template>
   <aside class="annotation-sidebar v050">
-    <header class="annotation-header compact thread-header">
+    <header class="annotation-header compact thread-header" title="双击关闭批注栏" @dblclick="onHeaderDblclick">
       <div>
         <h3>批注</h3>
         <small>{{ activePath || "当前文件" }}</small>

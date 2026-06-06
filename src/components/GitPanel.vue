@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue';
-import type { GitStatusEntry, GitWorkspace, LatexBuildResult } from '../types/app';
+import type { GitStatusEntry, GitWorkspace, LatexBuildResult, MarkdownRenderPreset } from '../types/app';
 
 const props = defineProps<{
   visible: boolean;
@@ -15,6 +15,7 @@ const props = defineProps<{
   latexBusy?: boolean;
   latexActive?: boolean;
   pdfRenderQuality?: number;
+  markdownRenderPreset?: MarkdownRenderPreset;
 }>();
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   cleanLatex: [];
   openPdf: [];
   updatePdfRenderQuality: [value: number];
+  updateMarkdownRenderPreset: [value: MarkdownRenderPreset];
   hide: [];
 }>();
 
@@ -39,6 +41,21 @@ const form = reactive<GitWorkspace>({
   rootPath: '',
 });
 const tokenForm = reactive({ token: '' });
+
+
+const markdownRenderPresets: Array<{ id: MarkdownRenderPreset; name: string; description: string }> = [
+  { id: 'default', name: '默认', description: '均衡的编辑预览风格，适合日常记录。' },
+  { id: 'academic', name: '学术论文', description: '较窄版心、衬线正文、标题层级清晰。' },
+  { id: 'reading', name: '长文阅读', description: '更舒展的行距和段距，适合审阅长笔记。' },
+  { id: 'compact', name: '紧凑', description: '减少边距和段距，适合并排预览。' },
+  { id: 'manuscript', name: '手稿', description: '接近投稿草稿，强调段落、引用和表格。' },
+];
+
+function onMarkdownPresetChange(event: Event) {
+  const target = event.target as HTMLSelectElement | null;
+  if (!target) return;
+  emit('updateMarkdownRenderPreset', target.value as MarkdownRenderPreset);
+}
 
 function onPdfQualityInput(event: Event) {
   const target = event.target as HTMLInputElement | null;
@@ -72,11 +89,21 @@ watch(
 function onOwnerInput() {
   emit('updateAuthorName', form.owner);
 }
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('hide');
+}
 </script>
 
 <template>
   <aside v-if="props.visible" class="git-panel settings-panel">
-    <div class="settings-header">
+    <div class="settings-header" title="双击关闭设置栏" @dblclick="onHeaderDblclick">
       <div>
         <h2>设置</h2>
         <small>GitHub、本地工作区、LaTeX 构建</small>
@@ -139,6 +166,31 @@ function onOwnerInput() {
         />
       </label>
       <p class="hint">低倍率更流畅，适合长论文；高倍率更清晰，但 PDF 渲染会更慢。只影响软件内预览，不影响导出的 PDF。</p>
+    </section>
+
+
+    <section class="panel-section markdown-render-section">
+      <h3>Markdown 渲染</h3>
+      <label class="select-field">
+        <span>预设风格</span>
+        <select :value="props.markdownRenderPreset || 'default'" @change="onMarkdownPresetChange">
+          <option v-for="preset in markdownRenderPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+        </select>
+      </label>
+      <div class="preset-description-list">
+        <button
+          v-for="preset in markdownRenderPresets"
+          :key="preset.id"
+          class="preset-chip"
+          :class="{ active: (props.markdownRenderPreset || 'default') === preset.id }"
+          :title="preset.description"
+          @click="emit('updateMarkdownRenderPreset', preset.id)"
+        >
+          <strong>{{ preset.name }}</strong>
+          <small>{{ preset.description }}</small>
+        </button>
+      </div>
+      <p class="hint">只影响软件内 Markdown 预览，不改动源文件，也不影响 Pandoc 导出。</p>
     </section>
 
     <section class="panel-section latex-section">

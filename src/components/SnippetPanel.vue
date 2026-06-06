@@ -10,11 +10,21 @@ const snippets = computed(() => {
   const q = query.value.trim().toLowerCase();
   return editorSnippets.filter((item) => (item.language === lang || item.language === 'both') && (!q || `${item.trigger} ${item.detail}`.toLowerCase().includes(q)));
 });
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  emit('close');
+}
 </script>
 
 <template>
   <section class="side-work-panel snippet-panel">
-    <header class="side-work-panel-header">
+    <header class="side-work-panel-header" title="双击关闭" @dblclick="onHeaderDblclick">
       <div>
         <h3>片段</h3>
         <small>在编辑器输入触发词后使用补全插入。</small>

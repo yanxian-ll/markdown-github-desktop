@@ -1,9 +1,9 @@
 {
   "name": "scholia-studio",
   "private": true,
-  "version": "0.9.9",
+  "version": "0.10.4",
   "type": "module",
-  "description": "A Tauri 2 + Vue 3 scholarly Markdown/LaTeX writing, preview, annotation, export, and project workspace.",
+  "description": "A local-first research workbench for notes, weekly reports, evidence-driven paper drafting, LaTeX/PDF review, annotation, and export.",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",

@@ -43,6 +43,7 @@ const emit = defineEmits<{
   ];
   focusAnnotation: [annotation: PaperAnnotation];
   toggleAnnotationPanel: [];
+  topbarDblclick: [event: MouseEvent];
 }>();
 
 type RenderTaskLike = { promise: Promise<unknown>; cancel: () => void };
@@ -153,6 +154,12 @@ function resetZoom() {
 function autoFitWidth() {
   fitMode.value = "width";
   updateAutoFitScale();
+}
+
+function onToolbarDblclick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('button, input, textarea, select, a, [role="button"]')) return;
+  emit("topbarDblclick", event);
 }
 
 function goPage(delta: number) {
@@ -1498,7 +1505,7 @@ onBeforeUnmount(() => {
     @scroll.passive="onScroll"
     @wheel="onWheel"
   >
-    <div class="pdf-toolbar pdf-main-toolbar">
+    <div class="pdf-toolbar pdf-main-toolbar pane-header" title="双击关闭或打开对应栏" @dblclick="onToolbarDblclick">
       <strong class="pdf-toolbar-title">预览</strong>
       <span class="toolbar-separator" />
       <button

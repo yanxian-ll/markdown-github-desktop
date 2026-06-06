@@ -2,6 +2,7 @@
 import { computed, defineComponent, h, nextTick, ref, watch } from 'vue';
 import type { PropType } from 'vue';
 import type { FileNode, MarkdownDocument } from '../types/app';
+import { RESEARCH_FLOW_STEPS, type ResearchFlowActionId } from '../config/workbench';
 
 const props = defineProps<{
   tree: FileNode[];
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   openLocal: [kind: 'folder' | 'file'];
   hide: [];
   dailyNote: [];
+  researchAction: [id: ResearchFlowActionId];
   select: [node?: FileNode];
   move: [payload: { source: FileNode; target?: FileNode }];
 }>();
@@ -28,6 +30,18 @@ const emit = defineEmits<{
 const draggedNode = ref<FileNode | null>(null);
 const rootDragOver = ref(false);
 const openMenuVisible = ref(false);
+const documentQuickSteps = RESEARCH_FLOW_STEPS.filter((step) => ['daily-note', 'weekly-report', 'evidence-index', 'paper-outline'].includes(step.id));
+
+function isInteractiveHeaderTarget(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  return !!target?.closest('button, input, textarea, select, a, [role="button"]');
+}
+
+function onHeaderDblclick(event: MouseEvent) {
+  if (isInteractiveHeaderTarget(event)) return;
+  openMenuVisible.value = false;
+  emit('hide');
+}
 
 function createFromSelection() {
   emit('create');
@@ -206,7 +220,7 @@ const TreeNode: any = defineComponent({
 
 <template>
   <aside v-if="props.visible" class="sidebar explorer-panel">
-    <div class="sidebar-header">
+    <div class="sidebar-header" title="双击关闭文档栏" @dblclick="onHeaderDblclick">
       <div>
         <strong>文档</strong>
         <small>{{ props.dirtyCount ? `${props.dirtyCount} 个未保存` : '项目文件与结构' }}</small>
@@ -229,6 +243,19 @@ const TreeNode: any = defineComponent({
         <button class="icon-button" title="刷新目录树和大纲索引" @click="emit('refresh')">↻</button>
       </div>
     </div>
+
+    <section class="document-flow-strip" aria-label="研究记录快捷入口">
+      <button
+        v-for="step in documentQuickSteps"
+        :key="step.id"
+        class="document-flow-button"
+        :title="`${step.title}：${step.targetPathHint}`"
+        @click="emit('researchAction', step.id)"
+      >
+        <strong>{{ step.shortLabel }}</strong>
+        <span>{{ step.label }}</span>
+      </button>
+    </section>
 
     <div class="tree-drop-root" :class="{ 'drag-over': rootDragOver }" @click="clearSelection" @dragover.prevent="rootDragOver = !!draggedNode" @dragleave="rootDragOver = false" @drop.prevent="dropToRoot">
       <div v-if="!props.tree.length" class="empty-state">
