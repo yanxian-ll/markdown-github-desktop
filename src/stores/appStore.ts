@@ -58,7 +58,7 @@ import type {
 } from "../types/latexIntelligence";
 import { emptyLatexIndex } from "../types/latexIntelligence";
 import { computeWritingStats, formatWritingStats } from '../services/writingStats';
-import { BUILTIN_TEMPLATES } from '../services/templates';
+import { getBuiltinTemplate } from '../services/templates';
 import {
   buildProjectLatexIndex,
   resolveIndexedFilePath,
@@ -734,6 +734,7 @@ export const useAppStore = defineStore("app", () => {
   const selectedNode = computed(() =>
     findNodeByPath(fileTree.value, selectedNodePath.value),
   );
+  const activeNodePath = computed(() => displayPathFromRelative(activeDocument.value?.relativePath));
   const dirtyCount = computed(
     () => documents.value.filter((doc) => doc.dirty).length,
   );
@@ -1164,6 +1165,10 @@ export const useAppStore = defineStore("app", () => {
   function setActiveDocument(id: string) {
     activeDocumentId.value = id;
     editorCursorLine.value = 1;
+    const displayPath = activeNodePath.value;
+    if (displayPath && findNodeByPath(fileTree.value, displayPath)) {
+      selectedNodePath.value = displayPath;
+    }
     applyLayoutForDocumentKind(activeDocument.value?.kind);
     persist().catch(() => undefined);
   }
@@ -1407,6 +1412,10 @@ export const useAppStore = defineStore("app", () => {
     doc.updatedAt = Date.now();
     status.value = `已保存本地：${doc.relativePath}`;
     await refreshWorkspace();
+    const savedDisplayPath = displayPathFromRelative(doc.relativePath);
+    if (savedDisplayPath && findNodeByPath(fileTree.value, savedDisplayPath)) {
+      selectedNodePath.value = savedDisplayPath;
+    }
     await persist();
   }
 
@@ -2407,35 +2416,71 @@ export const useAppStore = defineStore("app", () => {
   }
 
 
-  async function createProjectFromTemplate(templateId: string) {
-    const template = BUILTIN_TEMPLATES.find((item) => item.id === templateId);
-    if (!template) throw new Error(`未找到模板：${templateId}`);
-    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区，再应用模板。');
-    const defaultFolder = template.id;
-    const rawFolder = window.prompt('输入模板创建目录。留空会取消。', defaultFolder);
-    if (!rawFolder) return;
-    const baseFolder = normalizePath(rawFolder).replace(/^\/+|\/+$/g, '');
-    if (!baseFolder) return;
-    const existing = findNodeByPath(fileTree.value, baseFolder);
-    if (existing) {
-      const ok = window.confirm(`目录 ${baseFolder} 已存在，继续写入可能覆盖同名文件，是否继续？`);
-      if (!ok) return;
+  async function prepareTemplateWorkspace() {
+    if (workspace.value?.localDir && workspace.value.localOpenKind !== 'file') return true;
+    const folder = await pickLocalFolder();
+    if (!folder) {
+      status.value = '已取消选择模板目标文件夹。';
+      return false;
     }
-    for (const file of template.files) {
-      const displayPath = `${baseFolder}/${normalizePath(file.path)}`;
-      await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), file.content);
-    }
-    status.value = `已从模板创建项目：${template.name}`;
-    await refreshWorkspace();
-    const mainPath = `${baseFolder}/${template.mainFile}`;
-    const node = findNodeByPath(fileTree.value, mainPath) || {
-      name: titleFromPath(mainPath),
-      path: mainPath,
-      kind: 'file' as const,
-      documentKind: kindFromPath(mainPath),
-      children: [],
+    const cleaned = stripTrailingSeparators(folder);
+    workspace.value = {
+      source: 'local',
+      localOpenKind: 'folder',
+      localFileName: undefined,
+      owner: commentAuthorName.value.trim(),
+      repo: baseNameOfPath(cleaned),
+      branch: '',
+      localDir: cleaned,
+      rootPath: '',
     };
-    await openWorkspaceFile(node);
+    selectedNodePath.value = undefined;
+    gitEntries.value = [];
+    clearWorkspaceDocumentsForNewRoot();
+    await loadAnnotations();
+    await refreshWorkspace();
+    await persist();
+    return true;
+  }
+
+  async function createProjectFromTemplate(templateId: string) {
+    const template = getBuiltinTemplate(templateId);
+    if (!template) throw new Error(`未找到模板：${templateId}`);
+    busy.value = true;
+    error.value = '';
+    try {
+      const workspaceReady = await prepareTemplateWorkspace();
+      if (!workspaceReady || !workspace.value?.localDir) return false;
+      const defaultFolder = template.id;
+      const rawFolder = window.prompt('输入模板创建目录。留空会取消。', defaultFolder);
+      if (!rawFolder) return false;
+      const baseFolder = normalizePath(rawFolder).replace(/^\/+|\/+$/g, '');
+      if (!baseFolder) return false;
+      const existing = findNodeByPath(fileTree.value, baseFolder);
+      if (existing) {
+        const ok = window.confirm(`目录 ${baseFolder} 已存在，继续写入可能覆盖同名文件，是否继续？`);
+        if (!ok) return false;
+      }
+      for (const file of template.files) {
+        const displayPath = `${baseFolder}/${normalizePath(file.path)}`;
+        await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), file.content);
+      }
+      status.value = `已从模板创建项目：${template.name}`;
+      await refreshWorkspace();
+      const mainPath = `${baseFolder}/${template.mainFile}`;
+      const node = findNodeByPath(fileTree.value, mainPath) || {
+        name: titleFromPath(mainPath),
+        path: mainPath,
+        kind: 'file' as const,
+        documentKind: kindFromPath(mainPath),
+        children: [],
+      };
+      await openWorkspaceFile(node);
+      await persist();
+      return true;
+    } finally {
+      busy.value = false;
+    }
   }
 
   async function createDailyNote() {
@@ -2516,6 +2561,7 @@ export const useAppStore = defineStore("app", () => {
     activeDocument,
     fileTree,
     selectedNodePath,
+    activeNodePath,
     workspace,
     gitEntries,
     gitDirtyCount,

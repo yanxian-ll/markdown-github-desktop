@@ -171,3 +171,12 @@
 - [ ] 将编辑侧栏宽度持久化到本地设置。
 - [ ] 为不同侧栏记忆独立宽度，例如大纲 260px、项目工具 380px。
 - [ ] 支持侧栏最小化为仅图标竖条。
+
+## v0.9.3 完成：模板注册表与 CSUthesis 内置骨架
+
+- [x] 将模板从单个 `services/templates.ts` 拆到 `src/templates/`，形成类型、注册表、模板工厂三层结构。
+- [x] 新增 CSUthesis 中南大学研究生学位论文模板入口，内置主文件、content 分章、README、latexmkrc、Makefile、BibTeX 示例和轻量兼容 `CSUthesis.cls`。
+- [x] LaTeX 构建支持识别 `% !TEX program = xelatex`，并在 fallback 时使用相同引擎。
+- [x] 模板 UI 显示 provider 和 tags，便于后续模板库扩展。
+- [ ] 后续接入完整上游 vendor 包，并保留上游 LICENSE/NOTICE。
+- [ ] 增加模板变量创建向导与模板校验单元测试。

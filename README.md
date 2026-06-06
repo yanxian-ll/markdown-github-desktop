@@ -1,3 +1,30 @@
+## v0.9.7-template-sidebar-isprs-vendor
+
+- 收紧内置模板原则：每个模板只对应一个期刊或会议，不再提供“某出版商遥感期刊合集”式模板。
+- 移除上一版不准确或容易误导的模板：`IEEE TGRS / JSTARS` 合并模板、`Elsevier 遥感期刊` 合并模板、带自写轻量 `mdpi.cls` 的 `MDPI Remote Sensing`。
+- 保留和重建公开来源可核对的模板：ISPRS Archives / Annals Full Paper、IEEE Transactions on Geoscience and Remote Sensing、Remote Sensing of Environment。
+- v0.9.7：ISPRS 模板创建项目时会直接写入 `isprs.cls` 和 `isprs.bst`；模板栏移动到文档树旁边。
+- 模板正文增加摘要、引言、相关工作、方法、实验/结果、讨论、结论、参考文献和表格示例，但文档类和投稿工作流保持官方来源路径，不再自制 publisher class。
+
+## 内置模板原始来源
+
+| 模板 | 类型 | 主要来源 | 内置策略 |
+| --- | --- | --- | --- |
+| CSUthesis 中南大学研究生学位论文 | 毕业论文 | https://github.com/CSUcse/CSUthesis；模板索引思路参考 https://github.com/hantang/latex-templates | 公开 GitHub 来源；后续可继续替换为完整 upstream vendor 文件 |
+| ISPRS Archives / Annals Full Paper | 会议/Proceedings | https://github.com/myst-templates/isprs；ISPRS Orange Book: https://www.isprs.org/documents/orangebook/app5.aspx | 内置公开模板的 `isprs.cls` 与 `isprs.bst`；不再用 article 类伪造 |
+| IEEE Transactions on Geoscience and Remote Sensing | 期刊 | https://www.overleaf.com/latex/templates/ieee-transactions-on-geoscience-and-remote-sensing-official-ieee-latex-template/mjsdtvfttpcy；https://www.grss-ieee.org/publications/author-resources/tgrs-information-for-authors/ | 单期刊模板；使用 IEEEtran，不再和 JSTARS 合并 |
+| Remote Sensing of Environment | 期刊 | https://www.elsevier.com/researcher/author/policies-and-guidelines/latex-instructions；https://ctan.org/pkg/elsarticle | 单期刊模板；使用 Elsevier `elsarticle` 工作流，不再作为 Elsevier 遥感合集 |
+| LaTeX 基础论文 / Markdown + Pandoc / Beamer | 内置通用模板 | Scholia Studio 内置起稿模板 | 非投稿模板，仅用于普通写作起稿 |
+
+说明：模板库不再加入“找不到明确公开复用来源”的期刊/会议模板，也不再通过自写 `.cls` 假装官方模板。正式投稿前仍应以期刊/会议最新 author guidelines 为准。
+
+## v0.9.5-template-center-remote-sensing
+
+- 编辑区“项目工具/设置”中移除模板入口；模板只保留在顶部工具栏和首次启动页。
+- 模板中心改为更轻量的软件选择界面：搜索框、标签筛选、紧凑卡片，不再把 roadmap/解释性文字放在卡片里。
+- 曾新增遥感/摄影测量方向模板入口；其中不准确的合并/近似模板已在 v0.9.6 收紧移除。
+- 模板注册仍然保持 `src/templates/builtin/*` + `catalog.ts` 的结构；后续新增模板只需新增模板工厂并注册。
+
 ## v0.9.0-framework-all
 
 - 新增“项目工具”统一侧栏：模板、导出配置、文献集成、写作工具、发布和长期功能框架集中管理。
@@ -87,7 +114,7 @@
 - 本地 JSON 状态存储
 - 系统凭据存储：Windows Credential Manager / macOS Keychain / Linux Secret Service
 - Git CLI：clone、status、commit、push
-- LaTeX CLI：latexmk / pdflatex
+- LaTeX CLI：latexmk / pdflatex / xelatex
 - Vitest + Playwright
 
 ## 开发运行

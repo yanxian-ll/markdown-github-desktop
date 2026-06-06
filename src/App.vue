@@ -13,11 +13,11 @@ import BibPreviewPopover from "./components/BibPreviewPopover.vue";
 import BuildPanel from './components/BuildPanel.vue';
 import BibManagerPanel from './components/BibManagerPanel.vue';
 import SnippetPanel from './components/SnippetPanel.vue';
-import ExportPanel from './components/ExportPanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
-import ProjectToolsPanel from './components/ProjectToolsPanel.vue';
+import WelcomeStart from './components/WelcomeStart.vue';
+import TemplateGallery from './components/TemplateGallery.vue';
 import { useAppStore } from "./stores/appStore";
-import type { FileNode, PaperAnnotationRect } from "./types/app";
+import type { DocumentKind, FileNode, PaperAnnotationRect } from "./types/app";
 
 const store = useAppStore();
 const {
@@ -30,6 +30,7 @@ const {
   explorerVisible,
   fileTree,
   selectedNodePath,
+  activeNodePath,
   gitDirtyCount,
   gitBusy,
   latexBusy,
@@ -56,6 +57,7 @@ const {
   activeBibPreview,
   activeDocumentDiagnostics,
   activeWritingStatsLabel,
+  hasWorkspace,
 } = storeToRefs(store);
 
 const activeText = computed({
@@ -110,16 +112,22 @@ const settingsWidth = ref(360);
 const previewWidth = ref(560);
 const imageZoom = ref(1);
 const markdownPdfPreviewMode = ref(false);
+const previewExportMenuVisible = ref(false);
 const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
 const editorSidePanelWidth = ref(280);
 const editorOutlineVisible = ref(false);
-const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'export' | 'history' | 'tools' | null>(null);
+const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'history' | null>(null);
 const bottomPanelVisible = ref(false);
-let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | "editorSide" | null =
+const templatePanelVisible = ref(false);
+const templatePanelWidth = ref(340);
+const scratchEditorVisible = ref(false);
+let resizeTarget: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | null =
   null;
 let annotationResizeRight = 0;
 let editorSideResizeLeft = 0;
+
+const startPageVisible = computed(() => !hasWorkspace.value && !scratchEditorVisible.value);
 
 const layoutClass = computed(() => ({
   "explorer-hidden": !explorerVisible.value,
@@ -131,6 +139,7 @@ const layoutClass = computed(() => ({
 const workspaceStyle = computed(() => {
   const columns: string[] = [];
   if (explorerVisible.value) columns.push(`${explorerWidth.value}px`, "6px");
+  if (templatePanelVisible.value) columns.push(`${templatePanelWidth.value}px`, "6px");
   columns.push("minmax(360px, 1fr)");
   if (gitPanelVisible.value) columns.push("6px", `${settingsWidth.value}px`);
   return { gridTemplateColumns: columns.join(" ") };
@@ -179,9 +188,17 @@ watch(
   () => {
     imageZoom.value = 1;
     markdownPdfPreviewMode.value = false;
+    previewExportMenuVisible.value = false;
     annotationPanelVisible.value = false;
     editorOutlineVisible.value = false;
     sideWorkPanel.value = null;
+  },
+);
+
+watch(
+  () => workspace.value?.localDir,
+  (localDir) => {
+    if (localDir) scratchEditorVisible.value = false;
   },
 );
 
@@ -190,7 +207,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function startResize(
-  target: "explorer" | "settings" | "preview" | "annotation" | "editorSide",
+  target: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide",
   event: MouseEvent,
 ) {
   resizeTarget = target;
@@ -216,6 +233,10 @@ function onResizeMove(event: MouseEvent) {
   const width = window.innerWidth;
   if (resizeTarget === "explorer") {
     explorerWidth.value = clamp(event.clientX, 190, Math.min(560, width - 720));
+  } else if (resizeTarget === "template") {
+    const leftReserve = explorerVisible.value ? explorerWidth.value + 6 : 0;
+    const maxTemplateWidth = Math.max(260, Math.min(520, width - leftReserve - 620));
+    templatePanelWidth.value = clamp(event.clientX - leftReserve, 260, maxTemplateWidth);
   } else if (resizeTarget === "settings") {
     settingsWidth.value = clamp(
       width - event.clientX,
@@ -226,9 +247,8 @@ function onResizeMove(event: MouseEvent) {
     const rightPanelWidth = gitPanelVisible.value
       ? settingsWidth.value + 14
       : 0;
-    const leftWorkspaceWidth = explorerVisible.value
-      ? explorerWidth.value + 6
-      : 0;
+    const leftWorkspaceWidth = (explorerVisible.value ? explorerWidth.value + 6 : 0) +
+      (templatePanelVisible.value ? templatePanelWidth.value + 6 : 0);
     const minEditorWidth = 220;
     const maxPreviewWidth = Math.max(
       360,
@@ -409,6 +429,7 @@ async function createMarkdownPreviewAnnotation(payload: {
 }
 
 async function exportMarkdownFormat(format: 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer') {
+  previewExportMenuVisible.value = false;
   try {
     await store.exportMarkdownFormat(format);
     if ((format === 'pdf' || format === 'beamer') && pdfPreviewUrl.value) markdownPdfPreviewMode.value = true;
@@ -429,23 +450,24 @@ async function handleDiagnosticOpen(payload: { file: string; line: number }) {
 
 async function createProjectFromTemplate(templateId: string) {
   try {
-    await store.createProjectFromTemplate(templateId);
+    const created = await store.createProjectFromTemplate(templateId);
+    if (created !== false) {
+      templatePanelVisible.value = false;
+      sideWorkPanel.value = null;
+    }
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
+}
+
+async function createScratchDocument(kind: DocumentKind = 'markdown') {
+  await store.newScratchDocument(kind);
+  scratchEditorVisible.value = true;
 }
 
 async function createDailyNote() {
   try {
     await store.createDailyNote();
-  } catch (err) {
-    store.error = err instanceof Error ? err.message : String(err);
-  }
-}
-
-async function createLocalSnapshot() {
-  try {
-    await store.createLocalSnapshot();
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
@@ -498,12 +520,14 @@ onBeforeUnmount(() => {
       :preview-visible="effectivePreviewVisible"
       :explorer-visible="explorerVisible"
       :git-panel-visible="gitPanelVisible"
+      :template-panel-visible="templatePanelVisible"
       :git-dirty-count="gitDirtyCount"
       :github-workspace="workspace?.source !== 'local' && !!workspace?.localDir"
       @submit-github="submitGithub"
       @toggle-preview="togglePreviewPane"
       @toggle-explorer="explorerVisible = !explorerVisible"
       @toggle-git-panel="gitPanelVisible = !gitPanelVisible"
+      @open-templates="templatePanelVisible = !templatePanelVisible"
     />
 
     <main class="workspace" :style="workspaceStyle">
@@ -514,6 +538,7 @@ onBeforeUnmount(() => {
         :active="activeDocument"
         :dirty-count="dirtyCount"
         :selected-path="selectedNodePath"
+        :active-path="activeNodePath"
         @open="store.openWorkspaceFile"
         @rename="store.renameItem"
         @create="createItem"
@@ -522,6 +547,7 @@ onBeforeUnmount(() => {
         @move="moveItem"
         @refresh="store.refreshWorkspace"
         @open-local="store.openLocalEntry"
+        @daily-note="createDailyNote"
         @hide="explorerVisible = false"
       />
       <div
@@ -531,7 +557,32 @@ onBeforeUnmount(() => {
         @mousedown="startResize('explorer', $event)"
       />
 
+      <section v-if="templatePanelVisible" class="template-side-panel">
+        <header class="template-side-panel-header">
+          <div>
+            <strong>模板</strong>
+            <small>搜索并创建学术项目</small>
+          </div>
+          <button class="toolbar-icon" title="关闭模板" @click="templatePanelVisible = false">×</button>
+        </header>
+        <TemplateGallery compact @create="createProjectFromTemplate" />
+      </section>
+      <div
+        v-if="templatePanelVisible"
+        class="resize-handle vertical"
+        title="拖动调整模板栏宽度"
+        @mousedown="startResize('template', $event)"
+      />
+
+      <WelcomeStart
+        v-if="startPageVisible"
+        :busy="busy || workspaceBusy"
+        @open-local="store.openLocalEntry"
+        @new-scratch="createScratchDocument"
+      />
+
       <section
+        v-else
         class="editor-layout"
         :class="{ 'preview-hidden': !effectivePreviewVisible, 'editor-hidden': !editorAreaVisible }"
         :style="editorLayoutStyle"
@@ -551,8 +602,6 @@ onBeforeUnmount(() => {
                 </button>
                 <button v-if="isLatexActive || activeDocument?.kind === 'bibtex'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'bib' }" title="参考文献" @click="sideWorkPanel = sideWorkPanel === 'bib' ? null : 'bib'">📚</button>
                 <button v-if="['latex','markdown'].includes(activeDocument?.kind || '')" class="toolbar-icon" :class="{ active: sideWorkPanel === 'snippets' }" title="片段" @click="sideWorkPanel = sideWorkPanel === 'snippets' ? null : 'snippets'">⌘</button>
-                <button v-if="activeDocument?.kind === 'markdown'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'export' }" title="导出" @click="sideWorkPanel = sideWorkPanel === 'export' ? null : 'export'">⇪</button>
-                <button class="toolbar-icon" :class="{ active: sideWorkPanel === 'tools' }" title="项目工具 / 模板 / 后续框架" @click="sideWorkPanel = sideWorkPanel === 'tools' ? null : 'tools'">⚙</button>
               </div>
               <div class="editor-title">
                 <span>编辑</span>
@@ -588,22 +637,7 @@ onBeforeUnmount(() => {
               />
               <BibManagerPanel v-else-if="sideWorkPanel === 'bib'" :entries="latexIndex.citations" @open="store.jumpToBibEntry" @close="sideWorkPanel = null" />
               <SnippetPanel v-else-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
-              <ExportPanel v-else-if="sideWorkPanel === 'export'" :active-kind="activeDocument?.kind" :busy="busy" @export-format="exportMarkdownFormat" @close="sideWorkPanel = null" />
               <HistoryPanel v-else-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
-              <ProjectToolsPanel
-                v-else-if="sideWorkPanel === 'tools'"
-                :active-kind="activeDocument?.kind"
-                :workspace="workspace"
-                :writing-stats-label="activeWritingStatsLabel"
-                :latex-index="latexIndex"
-                :diagnostics="activeDocumentDiagnostics"
-                :busy="busy"
-                @create-template="createProjectFromTemplate"
-                @create-daily-note="createDailyNote"
-                @create-snapshot="createLocalSnapshot"
-                @export-format="exportMarkdownFormat"
-                @close="sideWorkPanel = null"
-              />
             </div>
             <div
               v-if="sideWorkPanel"
@@ -647,21 +681,31 @@ onBeforeUnmount(() => {
           <div v-if="!pdfPreviewActive" class="preview-header">
             <span>预览</span>
             <div class="preview-header-actions">
-              <button
-                v-if="activeDocument?.kind === 'markdown'"
-                class="toolbar-icon"
-                title="使用 Pandoc 构建 Markdown PDF（Ctrl/⌘+B）"
-                @click="buildActiveDocument"
-              >
-                ⎙
-              </button>
+              <div v-if="activeDocument?.kind === 'markdown'" class="preview-export-control">
+                <button
+                  class="preview-export-button"
+                  :class="{ active: previewExportMenuVisible }"
+                  title="导出 Markdown"
+                  @click.stop="previewExportMenuVisible = !previewExportMenuVisible"
+                >
+                  导出
+                </button>
+                <div v-if="previewExportMenuVisible" class="preview-export-menu" @click.stop>
+                  <button :disabled="busy" @click="exportMarkdownFormat('pdf')"><strong>PDF</strong><small>Pandoc + LaTeX</small></button>
+                  <button :disabled="busy" @click="exportMarkdownFormat('docx')"><strong>DOCX</strong><small>Word 协作</small></button>
+                  <button :disabled="busy" @click="exportMarkdownFormat('html')"><strong>HTML</strong><small>网页发布</small></button>
+                  <button :disabled="busy" @click="exportMarkdownFormat('latex')"><strong>LaTeX</strong><small>生成 .tex</small></button>
+                  <button :disabled="busy" @click="exportMarkdownFormat('beamer')"><strong>Beamer</strong><small>幻灯片 PDF</small></button>
+                  <button :disabled="busy" @click="exportMarkdownFormat('epub')"><strong>EPUB</strong><small>电子书</small></button>
+                </div>
+              </div>
               <button
                 v-if="activeDocument?.kind === 'markdown' && pdfPreviewUrl"
-                class="toolbar-icon"
+                class="toolbar-icon preview-action-button"
                 title="查看 Pandoc 生成的 PDF"
-                @click="markdownPdfPreviewMode = true"
+                @click="previewExportMenuVisible = false; markdownPdfPreviewMode = true"
               >
-                PDF
+                查看 PDF
               </button>
               <button
                 v-if="annotationPanelAvailable"
@@ -945,6 +989,8 @@ onBeforeUnmount(() => {
       @open-diagnostic="handleDiagnosticOpen"
       @close="bottomPanelVisible = false"
     />
+
+
 
     <footer class="statusbar">
       <button class="link-button" @click="darkMode = !darkMode">

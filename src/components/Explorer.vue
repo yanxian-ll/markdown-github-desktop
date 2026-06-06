@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, ref } from 'vue';
+import { computed, defineComponent, h, nextTick, ref, watch } from 'vue';
 import type { PropType } from 'vue';
 import type { FileNode, MarkdownDocument } from '../types/app';
 
@@ -9,6 +9,7 @@ const props = defineProps<{
   dirtyCount: number;
   visible: boolean;
   selectedPath?: string;
+  activePath?: string;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   refresh: [];
   openLocal: [kind: 'folder' | 'file'];
   hide: [];
+  dailyNote: [];
   select: [node?: FileNode];
   move: [payload: { source: FileNode; target?: FileNode }];
 }>();
@@ -53,7 +55,21 @@ function displayPath(path?: string) {
   return (path || '').replace(/^\/+/, '').replace(/\\/g, '/');
 }
 
-const activeDisplayPath = computed(() => displayPath(props.active?.relativePath));
+const activeDisplayPath = computed(() => displayPath(props.activePath || props.active?.relativePath));
+
+function sameTreePath(left?: string, right?: string) {
+  return !!left && !!right && displayPath(left) === displayPath(right);
+}
+
+function nodeContainsPath(node: FileNode, path?: string): boolean {
+  if (!path) return false;
+  if (sameTreePath(node.path, path)) return true;
+  if (node.kind !== 'folder') return false;
+  const normalizedPath = displayPath(path);
+  const normalizedFolder = displayPath(node.path);
+  if (normalizedFolder && normalizedPath.startsWith(`${normalizedFolder}/`)) return true;
+  return node.children.some((child) => nodeContainsPath(child, path));
+}
 
 
 const TreeNode: any = defineComponent({
@@ -68,6 +84,33 @@ const TreeNode: any = defineComponent({
   setup(componentProps, { emit: componentEmit }) {
     const expanded = ref(false);
     const dragOver = ref(false);
+    const rowElement = ref<HTMLElement | null>(null);
+
+    const activeMatch = computed(() => sameTreePath(componentProps.activePath, componentProps.node.path));
+    const selectedMatch = computed(() => sameTreePath(componentProps.selectedPath, componentProps.node.path));
+    const shouldReveal = computed(() =>
+      componentProps.node.kind === 'folder' &&
+      (nodeContainsPath(componentProps.node, componentProps.activePath) ||
+        nodeContainsPath(componentProps.node, componentProps.selectedPath))
+    );
+
+    watch(
+      shouldReveal,
+      (reveal) => {
+        if (reveal) expanded.value = true;
+      },
+      { immediate: true },
+    );
+
+    watch(
+      () => activeMatch.value || selectedMatch.value,
+      async (matched) => {
+        if (!matched) return;
+        await nextTick();
+        rowElement.value?.scrollIntoView({ block: 'nearest' });
+      },
+      { immediate: true },
+    );
 
     const icon = () => {
       if (componentProps.node.kind === 'folder') return expanded.value ? '▾' : '▸';
@@ -112,10 +155,11 @@ const TreeNode: any = defineComponent({
 
     return (): any => h('li', [
       h('div', {
+        ref: rowElement,
         class: {
           'tree-row': true,
-          active: componentProps.node.kind === 'file' && !!componentProps.activePath && componentProps.activePath.endsWith(componentProps.node.path),
-          selected: componentProps.selectedPath === componentProps.node.path,
+          active: componentProps.node.kind === 'file' && activeMatch.value,
+          selected: selectedMatch.value,
           folder: componentProps.node.kind === 'folder',
           dragging: componentProps.draggedPath === componentProps.node.path,
           'drag-over': dragOver.value,
@@ -180,15 +224,15 @@ const TreeNode: any = defineComponent({
             <button @click="openMenuVisible = false; emit('openLocal', 'file')">打开文件</button>
           </div>
         </div>
+        <button class="icon-button daily-note-button" title="打开今日写作笔记" aria-label="打开今日写作笔记" @click="emit('dailyNote')">日</button>
         <button class="icon-button" title="在当前选中目录中新建；未选中时在根目录新建" @click="createFromSelection">＋</button>
         <button class="icon-button" title="刷新目录树和大纲索引" @click="emit('refresh')">↻</button>
-        <button class="icon-button" title="隐藏文档树" @click="emit('hide')">☰</button>
       </div>
     </div>
 
     <div class="tree-drop-root" :class="{ 'drag-over': rootDragOver }" @click="clearSelection" @dragover.prevent="rootDragOver = !!draggedNode" @dragleave="rootDragOver = false" @drop.prevent="dropToRoot">
       <div v-if="!props.tree.length" class="empty-state">
-        当前没有打开文档。点击上方打开按钮选择本地文件或文件夹，也可以在设置中获取/更新 GitHub 工作区。
+        当前没有打开文档。点击上方打开按钮选择本地文件或文件夹。
       </div>
 
       <ul v-else class="tree-root" @click.stop>
@@ -196,7 +240,7 @@ const TreeNode: any = defineComponent({
           v-for="node in props.tree"
           :key="node.path"
           :node="node"
-          :active-path="props.active?.relativePath"
+          :active-path="activeDisplayPath"
           :selected-path="props.selectedPath"
           :dragged-path="draggedNode?.path"
           @open="emit('open', $event)"

@@ -7,6 +7,7 @@ const props = defineProps<{
   previewVisible?: boolean;
   explorerVisible?: boolean;
   gitPanelVisible?: boolean;
+  templatePanelVisible?: boolean;
   gitDirtyCount?: number;
   githubWorkspace?: boolean;
 }>();
@@ -16,6 +17,7 @@ const emit = defineEmits<{
   togglePreview: [];
   toggleExplorer: [];
   toggleGitPanel: [];
+  openTemplates: [];
 }>();
 </script>
 
@@ -32,6 +34,9 @@ const emit = defineEmits<{
       </div>
     </div>
     <div class="actions compact-actions">
+      <button class="primary template-toolbar-button" :class="{ active: props.templatePanelVisible }" :title="props.templatePanelVisible ? '隐藏模板栏' : '显示模板栏'" @click="emit('openTemplates')">
+        模板
+      </button>
       <button
         :disabled="props.busy || !props.githubWorkspace || !props.gitDirtyCount"
         :title="props.githubWorkspace ? '提交源码、资源和批注到 GitHub' : '本地工作区无需 GitHub 提交'"

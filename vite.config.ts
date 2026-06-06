@@ -9,6 +9,10 @@ export default defineConfig({
     port: 5173,
   },
   envPrefix: ['VITE_', 'TAURI_'],
+  test: {
+    include: ['src/**/*.test.ts'],
+    exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**'],
+  },
   build: {
     target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,

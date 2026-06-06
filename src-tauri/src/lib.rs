@@ -687,6 +687,51 @@ fn read_tex_root(tex_path: &Path) -> PathBuf {
     tex_path.to_path_buf()
 }
 
+fn normalize_latex_engine(value: &str) -> Option<&'static str> {
+    let normalized = value
+        .trim()
+        .trim_matches(|c| c == '%' || c == ' ' || c == '\t')
+        .to_ascii_lowercase()
+        .replace('-', "");
+    if normalized.contains("xelatex") || normalized.contains("xetex") {
+        Some("xelatex")
+    } else if normalized.contains("lualatex") || normalized.contains("luatex") {
+        Some("lualatex")
+    } else if normalized.contains("pdflatex") {
+        Some("pdflatex")
+    } else {
+        None
+    }
+}
+
+fn read_tex_program(tex_path: &Path) -> &'static str {
+    let content = fs::read_to_string(tex_path).unwrap_or_default();
+    for line in content.lines().take(60) {
+        let lower = line.to_ascii_lowercase();
+        if (lower.contains("!tex") || lower.contains("ts-program"))
+            && (lower.contains("program") || lower.contains("ts-program"))
+        {
+            if let Some((_, value)) = line.split_once('=') {
+                if let Some(engine) = normalize_latex_engine(value) {
+                    return engine;
+                }
+            }
+        }
+    }
+    if content.contains("\\documentclass") && content.contains("{CSUthesis}") {
+        return "xelatex";
+    }
+    "pdflatex"
+}
+
+fn latexmk_mode_arg(engine: &str) -> &'static str {
+    match engine {
+        "xelatex" => "-xelatex",
+        "lualatex" => "-lualatex",
+        _ => "-pdf",
+    }
+}
+
 fn tex_uses_bibliography(tex_path: &Path) -> bool {
     let content = fs::read_to_string(tex_path).unwrap_or_default();
     content.contains("\\bibliography{") || content.contains("\\addbibresource{") || content.contains("\\printbibliography")
@@ -963,29 +1008,31 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
     let work_dir = tex_path.parent().ok_or_else(|| "无法获取 LaTeX 文件目录。".to_string())?;
     let file_name = tex_path.file_name().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
     let stem = tex_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
+    let engine = read_tex_program(&tex_path);
+    let latexmk_mode = latexmk_mode_arg(engine);
 
     let mut latexmk = Command::new("latexmk");
-    latexmk.current_dir(work_dir).args(["-pdf", "-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
+    latexmk.current_dir(work_dir).args([latexmk_mode, "-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
     match latexmk.output() {
         Ok(output) => {
-            let log = format!("$ latexmk -pdf -interaction=nonstopmode -synctex=1 -file-line-error {file_name}\n{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            let log = format!("$ latexmk {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}\n{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
             let pdf_path = tex_path.with_extension("pdf");
             return Ok(LatexBuildResult {
                 ok: output.status.success() && pdf_path.exists(),
-                command: format!("latexmk -pdf -interaction=nonstopmode -synctex=1 -file-line-error {file_name}"),
+                command: format!("latexmk {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}"),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
                 diagnostics: parse_latex_diagnostics(&log),
                 log,
             });
         }
         Err(_) => {
-            // Fallback for machines that only have pdflatex + bibtex/biber.
-            let mut combined = String::from("latexmk 不可用，回退到 pdflatex/bibtex/biber 多轮构建。\n");
+            // Fallback for machines that only have one TeX engine + bibtex/biber.
+            let mut combined = format!("latexmk 不可用，回退到 {engine}/bibtex/biber 多轮构建。\n");
             let mut ok = true;
-            let first = run_latex_command(work_dir, "pdflatex", &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
+            let first = run_latex_command(work_dir, engine, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
             match first {
                 Ok((success, log)) => { ok &= success; combined.push_str(&log); }
-                Err(error) => return Err(format!("无法执行 latexmk 或 pdflatex。请先安装 TeX Live/MiKTeX 并配置 PATH。原始错误：{error}")),
+                Err(error) => return Err(format!("无法执行 latexmk 或 {engine}。请先安装 TeX Live/MiKTeX 并配置 PATH。原始错误：{error}")),
             }
 
             let aux = work_dir.join(format!("{stem}.aux"));
@@ -1005,15 +1052,15 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
             }
 
             for _ in 0..2 {
-                match run_latex_command(work_dir, "pdflatex", &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]) {
+                match run_latex_command(work_dir, engine, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]) {
                     Ok((success, log)) => { ok &= success; combined.push_str(&log); }
-                    Err(error) => { ok = false; combined.push_str(&format!("pdflatex 执行失败：{error}\n")); }
+                    Err(error) => { ok = false; combined.push_str(&format!("{engine} 执行失败：{error}\n")); }
                 }
             }
             let pdf_path = tex_path.with_extension("pdf");
             Ok(LatexBuildResult {
                 ok: ok && pdf_path.exists(),
-                command: format!("pdflatex + {} + pdflatex x2", if bcf.exists() { "biber" } else { "bibtex" }),
+                command: format!("{engine} + {} + {engine} x2", if bcf.exists() { "biber" } else { "bibtex" }),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
                 diagnostics: parse_latex_diagnostics(&combined),
                 log: combined,

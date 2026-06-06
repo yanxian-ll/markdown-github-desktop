@@ -1,103 +1,13 @@
-export interface TemplateFile {
-  path: string;
-  content: string;
-}
-
-export interface BuiltinTemplate {
-  id: string;
-  name: string;
-  kind: 'latex' | 'markdown' | 'beamer';
-  description: string;
-  mainFile: string;
-  engine?: string;
-  bibliography?: string;
-  files: TemplateFile[];
-  roadmap?: string[];
-}
-
-export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
-  {
-    id: 'latex-basic-paper',
-    name: 'LaTeX 基础论文',
-    kind: 'latex',
-    description: '适合普通论文草稿：main.tex、refs.bib、figures/ 和 chapters/。',
-    mainFile: 'main.tex',
-    engine: 'xelatex/latexmk',
-    bibliography: 'refs.bib',
-    files: [
-      {
-        path: 'main.tex',
-        content: String.raw`% !TEX root = main.tex
-\documentclass[11pt]{article}
-\usepackage[UTF8]{ctex}
-\usepackage{graphicx}
-\usepackage{amsmath,amssymb}
-\usepackage{hyperref}
-\usepackage{cite}
-\title{论文标题}
-\author{作者}
-\date{\today}
-
-\begin{document}
-\maketitle
-
-\begin{abstract}
-这里写摘要。
-\end{abstract}
-
-\input{chapters/introduction}
-\input{chapters/method}
-\input{chapters/experiments}
-\input{chapters/conclusion}
-
-\bibliographystyle{plain}
-\bibliography{refs}
-\end{document}
-`,
-      },
-      { path: 'chapters/introduction.tex', content: '\\section{Introduction}\n这里写引言。\\label{sec:introduction}\n' },
-      { path: 'chapters/method.tex', content: '\\section{Method}\n这里写方法。\\label{sec:method}\n' },
-      { path: 'chapters/experiments.tex', content: '\\section{Experiments}\n这里写实验。\\label{sec:experiments}\n' },
-      { path: 'chapters/conclusion.tex', content: '\\section{Conclusion}\n这里写结论。\\label{sec:conclusion}\n' },
-      { path: 'refs.bib', content: '@article{sample2026,\n  title={A Sample Paper},\n  author={Author, Alice},\n  year={2026},\n  journal={Journal}\n}\n' },
-      { path: 'figures/.gitkeep', content: '' },
-    ],
-    roadmap: ['后续可增加 ACM/IEEE/Springer 原始模板导入。', '支持用户模板目录和模板市场。'],
-  },
-  {
-    id: 'markdown-pandoc-paper',
-    name: 'Markdown + Pandoc 论文',
-    kind: 'markdown',
-    description: '适合 Markdown 写作，通过 Pandoc 导出 PDF/DOCX/HTML。',
-    mainFile: 'paper.md',
-    engine: 'pandoc + xelatex',
-    bibliography: 'refs.bib',
-    files: [
-      {
-        path: 'paper.md',
-        content: `---\ntitle: Markdown + LaTeX 混合论文\nauthor: 作者\nbibliography: refs.bib\n---\n\n# Introduction\n\n这里写引言，支持行内公式 $E=mc^2$。\n\n## Figure 示例\n\n\`\`\`figure\nsrc: figures/demo.png\ncaption: Demo figure\nlabel: fig:demo\n\`\`\`\n\n# Method\n\n这里写方法。\n`,
-      },
-      { path: 'refs.bib', content: '@article{sample2026,\n  title={A Sample Paper},\n  author={Author, Alice},\n  year={2026},\n  journal={Journal}\n}\n' },
-      { path: 'figures/.gitkeep', content: '' },
-    ],
-    roadmap: ['后续支持导出配置 profile。', '支持 CSL 样式和自定义 Pandoc 模板。'],
-  },
-  {
-    id: 'beamer-basic',
-    name: 'Beamer 演示文稿',
-    kind: 'beamer',
-    description: 'Markdown/LaTeX 演示文稿框架，后续可接 Pandoc Beamer 导出。',
-    mainFile: 'slides.md',
-    engine: 'pandoc beamer + xelatex',
-    files: [
-      {
-        path: 'slides.md',
-        content: `---\ntitle: 演示文稿标题\nauthor: 作者\ntheme: Madrid\n---\n\n# 背景\n\n- 研究问题\n- 主要贡献\n\n# 方法\n\n$$\na^2+b^2=c^2\n$$\n`,
-      },
-    ],
-    roadmap: ['后续支持内置主题预览。', '支持 Markdown → Beamer PDF 一键导出配置。'],
-  },
-];
+export type {
+  BuiltinTemplate,
+  BuiltinTemplateFactory,
+  TemplateFile,
+  TemplateKind,
+  TemplateLicense,
+  TemplateProvider,
+  TemplateSource,
+} from '../templates';
+export { BUILTIN_TEMPLATES, getBuiltinTemplate, listBuiltinTemplateFactories } from '../templates';
 
 export interface ExportProfile {
   id: string;
