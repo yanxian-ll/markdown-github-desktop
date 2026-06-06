@@ -1,3 +1,12 @@
+## v0.8.0-integrated-framework
+
+- 集成剩余规划功能的第一批可运行框架：问题/输出/日志底部面板、参考文献管理侧栏、Snippet 面板、Markdown 多格式导出面板、历史框架面板。
+- 编辑器新增 LaTeX/Markdown Snippet 补全：`fig/table/eq/align/algo/theorem` 与 `/figure`、`/table`、`/todo`、`/note`。
+- 新增公式 hover 预览：悬停 `$...$`、`$$...$$`、`equation/align` 环境时通过 KaTeX 渲染。
+- Markdown 多格式导出通过 Pandoc 支持 PDF、DOCX、HTML、EPUB、LaTeX、Beamer PDF，并弹出保存路径。
+- 编辑区显示当前文件字数/行数统计；`Ctrl/Cmd+C` 保留选区复制，仅在无选区时复制整行。
+- 复杂功能如 Zotero、DOI 导入、Git diff、修订追踪、模板市场、导出 profile 已落到 `TODO.md`，本版先实现 UI/服务框架和可继续迭代的入口。
+
 ## v0.5.0
 
 ## v0.6.2 更新说明

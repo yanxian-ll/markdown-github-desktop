@@ -10,6 +10,11 @@ import PdfPreview from "./components/PdfPreview.vue";
 import AnnotationSidebar from "./components/AnnotationSidebar.vue";
 import Toolbar from "./components/Toolbar.vue";
 import BibPreviewPopover from "./components/BibPreviewPopover.vue";
+import BuildPanel from './components/BuildPanel.vue';
+import BibManagerPanel from './components/BibManagerPanel.vue';
+import SnippetPanel from './components/SnippetPanel.vue';
+import ExportPanel from './components/ExportPanel.vue';
+import HistoryPanel from './components/HistoryPanel.vue';
 import { useAppStore } from "./stores/appStore";
 import type { FileNode, PaperAnnotationRect } from "./types/app";
 
@@ -49,6 +54,7 @@ const {
   latexIndex,
   activeBibPreview,
   activeDocumentDiagnostics,
+  activeWritingStatsLabel,
 } = storeToRefs(store);
 
 const activeText = computed({
@@ -106,6 +112,8 @@ const markdownPdfPreviewMode = ref(false);
 const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
 const editorOutlineVisible = ref(false);
+const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'export' | 'history' | null>(null);
+const bottomPanelVisible = ref(false);
 let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | null =
   null;
 let annotationResizeRight = 0;
@@ -163,6 +171,7 @@ watch(
     markdownPdfPreviewMode.value = false;
     annotationPanelVisible.value = false;
     editorOutlineVisible.value = false;
+    sideWorkPanel.value = null;
   },
 );
 
@@ -375,6 +384,24 @@ async function createMarkdownPreviewAnnotation(payload: {
   }
 }
 
+async function exportMarkdownFormat(format: 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer') {
+  try {
+    await store.exportMarkdownFormat(format);
+    if ((format === 'pdf' || format === 'beamer') && pdfPreviewUrl.value) markdownPdfPreviewMode.value = true;
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function handleDiagnosticOpen(payload: { file: string; line: number }) {
+  try {
+    await store.openLatexIndexedPath(payload.file);
+    store.editorGotoLine = payload.line;
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function handleLatexNavigate(payload: { kind: 'label' | 'bib' | 'file'; key: string }) {
   try {
     if (payload.kind === 'label') await store.jumpToLatexLabel(payload.key);
@@ -466,9 +493,9 @@ onBeforeUnmount(() => {
               <button
                 v-if="editorOutlineAvailable"
                 class="toolbar-icon outline-toggle-button"
-                :class="{ active: editorOutlineVisible }"
-                :title="editorOutlineVisible ? '隐藏大纲' : '显示当前文件大纲'"
-                @click="editorOutlineVisible = !editorOutlineVisible"
+                :class="{ active: sideWorkPanel === 'outline' }"
+                :title="sideWorkPanel === 'outline' ? '隐藏大纲' : '显示当前文件大纲'"
+                @click="sideWorkPanel = sideWorkPanel === 'outline' ? null : 'outline'"
               >
                 ☷<small v-if="activeFileOutlineCount">{{ activeFileOutlineCount }}</small>
               </button>
@@ -478,6 +505,11 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="editor-header-actions">
+              <span class="writing-stats-pill" :title="'当前文件统计：' + activeWritingStatsLabel">{{ activeWritingStatsLabel }}</span>
+              <button v-if="isLatexActive || activeDocument?.kind === 'bibtex'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'bib' }" title="参考文献" @click="sideWorkPanel = sideWorkPanel === 'bib' ? null : 'bib'">☷</button>
+              <button v-if="['latex','markdown'].includes(activeDocument?.kind || '')" class="toolbar-icon" :class="{ active: sideWorkPanel === 'snippets' }" title="片段" @click="sideWorkPanel = sideWorkPanel === 'snippets' ? null : 'snippets'">⌘</button>
+              <button v-if="activeDocument?.kind === 'markdown'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'export' }" title="导出" @click="sideWorkPanel = sideWorkPanel === 'export' ? null : 'export'">⇪</button>
+              <button class="toolbar-icon" :class="{ active: bottomPanelVisible }" title="问题 / 输出 / 日志" @click="bottomPanelVisible = !bottomPanelVisible">⚠</button>
               <span
                 v-if="activeDiagnosticCount"
                 class="editor-diagnostic-pill"
@@ -490,16 +522,20 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="editor-body-layout"
-            :class="{ 'outline-visible': editorOutlineAvailable && editorOutlineVisible }"
+            :class="{ 'outline-visible': !!sideWorkPanel }"
           >
             <EditorOutlinePanel
-              v-if="editorOutlineAvailable && editorOutlineVisible"
+              v-if="editorOutlineAvailable && sideWorkPanel === 'outline'"
               :outline="latexIndex.outline"
               :active="activeDocument"
               :active-line="editorCursorLine"
               @open="store.openLatexOutlineItem"
-              @close="editorOutlineVisible = false"
+              @close="sideWorkPanel = null"
             />
+            <BibManagerPanel v-if="sideWorkPanel === 'bib'" :entries="latexIndex.citations" @open="store.jumpToBibEntry" @close="sideWorkPanel = null" />
+            <SnippetPanel v-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
+            <ExportPanel v-if="sideWorkPanel === 'export'" :active-kind="activeDocument?.kind" :busy="busy" @export-format="exportMarkdownFormat" @close="sideWorkPanel = null" />
+            <HistoryPanel v-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
             <div class="editor-code-pane">
               <MarkdownEditor
                 v-model="activeText"
@@ -827,13 +863,21 @@ onBeforeUnmount(() => {
       />
     </main>
 
+    <BuildPanel
+      v-if="bottomPanelVisible"
+      :diagnostics="activeDocumentDiagnostics"
+      :latex-result="latexResult"
+      @open-diagnostic="handleDiagnosticOpen"
+      @close="bottomPanelVisible = false"
+    />
+
     <footer class="statusbar">
       <button class="link-button" @click="darkMode = !darkMode">
         {{ darkMode ? "浅色" : "深色" }}
       </button>
-      <button class="link-button" @click="store.refreshWorkspace">
-        刷新工作区
-      </button>
+      <button class="link-button" @click="store.refreshWorkspace">刷新工作区</button>
+      <button class="link-button" @click="sideWorkPanel = sideWorkPanel === 'history' ? null : 'history'">历史</button>
+      <button class="link-button" @click="bottomPanelVisible = !bottomPanelVisible">问题</button>
       <span>{{ busy ? "处理中…" : status }}</span>
       <span v-if="activeDocumentId"
         >当前：{{ activeDocument?.relativePath || activeDocument?.title }}</span

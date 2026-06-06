@@ -5,6 +5,7 @@ import { makeId } from "../services/hash";
 import {
   buildLatex as buildLatexFile,
   buildMarkdownPandoc as buildMarkdownPandocFile,
+  exportMarkdownPandoc as exportMarkdownPandocFile,
   cleanLatex as cleanLatexFiles,
   cloneOrUpdateRepository,
   commitAndPush,
@@ -56,6 +57,7 @@ import type {
   ProjectLatexIndex,
 } from "../types/latexIntelligence";
 import { emptyLatexIndex } from "../types/latexIntelligence";
+import { computeWritingStats, formatWritingStats } from '../services/writingStats';
 import {
   buildProjectLatexIndex,
   resolveIndexedFilePath,
@@ -754,6 +756,13 @@ export const useAppStore = defineStore("app", () => {
     const normalized = normalizePath(displayPath);
     return latexIndex.value.diagnostics.filter((item) => normalizePath(item.file) === normalized);
   });
+
+  const activeWritingStats = computed(() =>
+    computeWritingStats(activeDocument.value?.text || '', activeDocument.value?.kind),
+  );
+  const activeWritingStatsLabel = computed(() =>
+    formatWritingStats(activeWritingStats.value),
+  );
 
   function applyLayoutForDocumentKind(kind?: DocumentKind) {
     if (!kind) return;
@@ -2374,6 +2383,28 @@ export const useAppStore = defineStore("app", () => {
     await openWorkspacePathAtLine(makeRelativePath(entry.file), entry.line);
   }
 
+
+  async function exportMarkdownFormat(format: 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer') {
+    const doc = activeDocument.value;
+    if (!workspace.value?.localDir || !doc?.relativePath || doc.kind !== 'markdown') {
+      throw new Error('多格式导出需要打开工作区内的 Markdown 文件。');
+    }
+    const result = await runExclusive('pandoc-export', 'Pandoc 导出', async () => {
+      status.value = `正在导出 ${format.toUpperCase()}…`;
+      return exportMarkdownPandocFile(workspace.value!.localDir, doc.relativePath!, format);
+    });
+    if (!result) return;
+    latexResult.value = result;
+    if (result.ok) {
+      status.value = `已导出：${result.pdfPath || format.toUpperCase()}`;
+      if ((format === 'pdf' || format === 'beamer') && result.pdfPath) {
+        await loadPdfPreview(result.pdfPath);
+      }
+    } else {
+      status.value = result.log || '已取消导出。';
+    }
+  }
+
   async function setPdfRenderQuality(value: number) {
     pdfRenderQuality.value = Math.min(
       1.25,
@@ -2431,6 +2462,8 @@ export const useAppStore = defineStore("app", () => {
     activeBibPreviewKey,
     activeBibPreview,
     activeDocumentDiagnostics,
+    activeWritingStats,
+    activeWritingStatsLabel,
     visibleAnnotations,
     visiblePdfAnnotations,
     visibleSourceAnnotations,
@@ -2476,6 +2509,7 @@ export const useAppStore = defineStore("app", () => {
     addAnnotationReply,
     updateAnnotationMessage,
     exportAnnotationsMarkdown,
+    exportMarkdownFormat,
     removeAnnotation,
     focusAnnotation,
     syncMarkdownPreviewFromEditor,

@@ -866,7 +866,8 @@ fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String) -> Re
         .arg(&temp_path)
         .args(["--from", "markdown+tex_math_dollars+raw_tex+yaml_metadata_block+fenced_divs"])
         .args(["--standalone", "--pdf-engine=xelatex"])
-        .args(["-o", &pdf_path.to_string_lossy()]);
+        .arg("-o")
+        .arg(&pdf_path);
     let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
     let log = format!("$ pandoc {file_name} --pdf-engine=xelatex -o {}\n{}{}", pdf_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     Ok(LatexBuildResult {
@@ -883,6 +884,70 @@ async fn build_markdown_pandoc(root_dir: String, relative_path: String) -> Resul
     tauri::async_runtime::spawn_blocking(move || build_markdown_pandoc_blocking(root_dir, relative_path))
         .await
         .map_err(|error| format!("Pandoc 后台任务失败：{error}"))?
+}
+
+
+fn pandoc_output_extension(format: &str) -> Result<&'static str, String> {
+    match format {
+        "pdf" | "beamer" => Ok("pdf"),
+        "docx" => Ok("docx"),
+        "html" => Ok("html"),
+        "epub" => Ok("epub"),
+        "latex" | "tex" => Ok("tex"),
+        other => Err(format!("不支持的导出格式：{other}")),
+    }
+}
+
+fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, format: String) -> Result<LatexBuildResult, String> {
+    let root = PathBuf::from(root_dir);
+    let md_path = safe_join(&root, &relative_path)?;
+    if !md_path.exists() {
+        return Err(format!("Markdown 文件不存在：{}", md_path.display()));
+    }
+    let work_dir = md_path.parent().ok_or_else(|| "无法获取 Markdown 文件目录。".to_string())?;
+    let stem = md_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "Markdown 文件名无效。".to_string())?;
+    let source = fs::read_to_string(&md_path).map_err(|error| format!("无法读取 Markdown 文件：{error}"))?;
+    let build_dir = root.join(".paper-notes").join("pandoc-build");
+    fs::create_dir_all(&build_dir).map_err(|error| format!("无法创建 Pandoc 构建目录：{error}"))?;
+    let temp_path = build_dir.join(format!("{stem}.export.md"));
+    fs::write(&temp_path, preprocess_markdown_latex_blocks(&source)).map_err(|error| format!("无法写入 Pandoc 临时文件：{error}"))?;
+    let ext = pandoc_output_extension(&format)?;
+    let default_name = format!("{stem}.{ext}");
+    let Some(output_path) = rfd::FileDialog::new()
+        .set_directory(work_dir)
+        .set_file_name(&default_name)
+        .save_file() else {
+            return Ok(LatexBuildResult { ok: false, command: "pandoc export canceled".into(), pdf_path: None, log: "已取消导出。".into(), diagnostics: vec![] });
+        };
+    let mut cmd = Command::new("pandoc");
+    cmd.current_dir(work_dir)
+        .arg(&temp_path)
+        .args(["--from", "markdown+tex_math_dollars+raw_tex+yaml_metadata_block+fenced_divs"])
+        .arg("--standalone");
+    if format == "pdf" {
+        cmd.arg("--pdf-engine=xelatex");
+    } else if format == "beamer" {
+        cmd.args(["-t", "beamer", "--pdf-engine=xelatex"]);
+    } else if format == "latex" || format == "tex" {
+        cmd.args(["-t", "latex"]);
+    }
+    cmd.arg("-o").arg(&output_path);
+    let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
+    let log = format!("$ pandoc {} -o {}\n{}{}", md_path.display(), output_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    Ok(LatexBuildResult {
+        ok: output.status.success() && output_path.exists(),
+        command: format!("pandoc export {format}"),
+        pdf_path: output_path.exists().then(|| output_path.to_string_lossy().to_string()),
+        diagnostics: parse_pandoc_diagnostics(&log, &relative_path),
+        log,
+    })
+}
+
+#[tauri::command]
+async fn export_markdown_pandoc(root_dir: String, relative_path: String, format: String) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || export_markdown_pandoc_blocking(root_dir, relative_path, format))
+        .await
+        .map_err(|error| format!("Pandoc 导出后台任务失败：{error}"))?
 }
 
 fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
@@ -1131,6 +1196,7 @@ pub fn run() {
             commit_and_push,
             build_latex,
             build_markdown_pandoc,
+            export_markdown_pandoc,
             find_latex_pdf,
             synctex_forward,
             synctex_reverse,

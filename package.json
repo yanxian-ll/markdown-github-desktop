@@ -1,7 +1,7 @@
 {
   "name": "markdown-latex-git-desktop",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "A Tauri 2 + Vue 3 desktop Markdown/LaTeX editor with local Git workspace and manual GitHub push.",
   "scripts": {

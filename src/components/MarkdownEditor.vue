@@ -6,6 +6,8 @@ import { markdown } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { keymap, Decoration, hoverTooltip, type DecorationSet } from '@codemirror/view';
+import { snippetCompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
+import katex from 'katex';
 import { autocompletion } from '@codemirror/autocomplete';
 import { oneDark } from '@codemirror/theme-one-dark';
 import type { DocumentKind } from '../types/app';
@@ -20,6 +22,7 @@ import {
 } from '../services/codeMirrorLatexIntelligence';
 import { readWorkspaceDataUrl } from '../services/tauriBridge';
 import { resolveGraphicPath, resolveIndexedFilePath } from '../services/latexIntelligence';
+import { editorSnippets } from '../services/snippets';
 
 const props = defineProps<{
   modelValue: string;
@@ -269,6 +272,59 @@ function createLatexHoverDom(target: NonNullable<ReturnType<typeof latexTargetAt
   return dom;
 }
 
+
+function snippetSource(context: CompletionContext): CompletionResult | null {
+  const word = context.matchBefore(/[\\/]?[A-Za-z][\w-]*$/);
+  if (!word || (word.from === word.to && !context.explicit)) return null;
+  const language = props.kind === 'latex' ? 'latex' : props.kind === 'markdown' ? 'markdown' : 'both';
+  const options = editorSnippets
+    .filter((snippet) => snippet.language === language || snippet.language === 'both')
+    .filter((snippet) => snippet.trigger.startsWith(word.text) || context.explicit)
+    .map((snippet) => snippetCompletion(snippet.insert, {
+      label: snippet.label,
+      detail: snippet.detail,
+      type: 'snippet',
+    }));
+  if (!options.length) return null;
+  return { from: word.from, options, validFor: /^[\\/]?[\w-]*$/ };
+}
+
+function mathRangeAt(text: string, offset: number) {
+  const candidates: Array<{ from: number; to: number; value: string; displayMode: boolean }> = [];
+  const block = /\$\$([\s\S]*?)\$\$/g;
+  let match: RegExpExecArray | null;
+  while ((match = block.exec(text))) {
+    candidates.push({ from: match.index, to: match.index + match[0].length, value: match[1], displayMode: true });
+  }
+  const inline = /(^|[^$])\$([^$\n]+?)\$/g;
+  while ((match = inline.exec(text))) {
+    const start = match.index + match[1].length;
+    candidates.push({ from: start, to: start + match[0].length - match[1].length, value: match[2], displayMode: false });
+  }
+  const env = /\\begin\{(equation|align|gather|multline)\*?\}([\s\S]*?)\\end\{\1\*?\}/g;
+  while ((match = env.exec(text))) {
+    candidates.push({ from: match.index, to: match.index + match[0].length, value: match[2], displayMode: true });
+  }
+  return candidates.find((item) => offset >= item.from && offset <= item.to) || null;
+}
+
+function createMathHoverDom(value: string, displayMode: boolean) {
+  const dom = document.createElement('div');
+  dom.className = 'cm-latex-hover-card cm-math-hover-card';
+  const title = document.createElement('span');
+  title.className = 'cm-latex-hover-kicker';
+  title.textContent = 'formula preview';
+  dom.appendChild(title);
+  const container = document.createElement('div');
+  try {
+    katex.render(value.trim(), container, { displayMode, throwOnError: false, strict: false });
+  } catch (error) {
+    container.textContent = error instanceof Error ? error.message : String(error);
+  }
+  dom.appendChild(container);
+  return dom;
+}
+
 function copyCurrentLine(editorView: EditorView) {
   const selection = editorView.state.selection.main;
   if (!selection.empty) return false;
@@ -314,8 +370,10 @@ function createExtensions() {
     basicSetup,
     languageExtension(),
     props.kind === 'latex'
-      ? autocompletion({ override: [latexCompletionSource(() => props.latexIndex)] })
-      : [],
+      ? autocompletion({ override: [latexCompletionSource(() => props.latexIndex), snippetSource] })
+      : props.kind === 'markdown'
+        ? autocompletion({ override: [snippetSource] })
+        : [],
     flashLineField,
     diagnosticLineField,
     Prec.highest(keymap.of([
@@ -341,6 +399,12 @@ function createExtensions() {
       },
     ])),
     hoverTooltip((editorView, pos) => {
+      if (props.kind === 'latex' || props.kind === 'markdown') {
+        const math = mathRangeAt(editorView.state.doc.toString(), pos);
+        if (math) {
+          return { pos: math.from, end: math.to, above: true, create: () => ({ dom: createMathHoverDom(math.value, math.displayMode) }) };
+        }
+      }
       if (props.kind !== 'latex') return null;
       const target = latexTargetAtPosition(pos);
       if (!target) return null;

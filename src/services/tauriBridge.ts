@@ -175,6 +175,13 @@ export async function buildMarkdownPandoc(rootDir: string, relativePath: string)
   return invoke<LatexBuildResult>('build_markdown_pandoc', { rootDir, relativePath });
 }
 
+export type PandocExportFormat = 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer';
+
+export async function exportMarkdownPandoc(rootDir: string, relativePath: string, format: PandocExportFormat): Promise<LatexBuildResult> {
+  if (!isTauriRuntime()) throw new Error('Pandoc 多格式导出需要在 Tauri 桌面环境中运行，并安装 Pandoc。');
+  return invoke<LatexBuildResult>('export_markdown_pandoc', { rootDir, relativePath, format });
+}
+
 export async function findLatexPdf(rootDir: string, relativePath: string): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   return invoke<string | null>('find_latex_pdf', { rootDir, relativePath });

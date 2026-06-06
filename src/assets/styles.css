@@ -2597,3 +2597,145 @@ button:disabled {
   align-items: center;
   gap: 6px;
 }
+
+/* v0.8.0+ framework panels: problems, bibliography, snippets, export, history */
+.bottom-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 32px;
+  height: 260px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.26);
+}
+.bottom-panel-header,
+.side-work-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.bottom-panel-tabs {
+  display: flex;
+  gap: 6px;
+}
+.bottom-panel-tabs button {
+  padding: 5px 9px;
+  font-size: 13px;
+}
+.bottom-panel-tabs button.active {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.16);
+}
+.bottom-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+.problem-list {
+  display: grid;
+  gap: 4px;
+}
+.problem-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 24px minmax(160px, 260px) 1fr;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: transparent;
+}
+.problem-row.error span:first-child { color: var(--danger); }
+.problem-row.warning span:first-child { color: var(--warn); }
+.build-log {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.side-work-panel {
+  min-width: 240px;
+  width: 280px;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 10px;
+}
+.side-work-panel h3 {
+  margin: 0 0 2px;
+}
+.bib-card-list,
+.snippet-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.bib-card,
+.snippet-card {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.08);
+}
+.bib-card span {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.snippet-card pre {
+  margin: 4px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.export-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.export-grid button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 10px;
+}
+.writing-stats-pill,
+.editor-diagnostic-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cm-math-hover-card .katex-display {
+  margin: 0.4em 0;
+}
+.cm-math-hover-card {
+  max-width: 420px;
+  overflow: auto;
+}
