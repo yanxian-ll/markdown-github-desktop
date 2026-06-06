@@ -15,6 +15,7 @@ import BibManagerPanel from './components/BibManagerPanel.vue';
 import SnippetPanel from './components/SnippetPanel.vue';
 import ExportPanel from './components/ExportPanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
+import ProjectToolsPanel from './components/ProjectToolsPanel.vue';
 import { useAppStore } from "./stores/appStore";
 import type { FileNode, PaperAnnotationRect } from "./types/app";
 
@@ -111,12 +112,14 @@ const imageZoom = ref(1);
 const markdownPdfPreviewMode = ref(false);
 const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
+const editorSidePanelWidth = ref(280);
 const editorOutlineVisible = ref(false);
-const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'export' | 'history' | null>(null);
+const sideWorkPanel = ref<'outline' | 'bib' | 'snippets' | 'export' | 'history' | 'tools' | null>(null);
 const bottomPanelVisible = ref(false);
-let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | null =
+let resizeTarget: "explorer" | "settings" | "preview" | "annotation" | "editorSide" | null =
   null;
 let annotationResizeRight = 0;
+let editorSideResizeLeft = 0;
 
 const layoutClass = computed(() => ({
   "explorer-hidden": !explorerVisible.value,
@@ -145,6 +148,13 @@ const paperReviewLayoutStyle = computed(() => {
     return { gridTemplateColumns: "minmax(320px, 1fr)" };
   return {
     gridTemplateColumns: `minmax(320px, 1fr) 6px ${annotationPanelWidth.value}px`,
+  };
+});
+
+const editorBodyLayoutStyle = computed(() => {
+  if (!sideWorkPanel.value) return { gridTemplateColumns: 'minmax(0, 1fr)' };
+  return {
+    gridTemplateColumns: `${editorSidePanelWidth.value}px 6px minmax(0, 1fr)`,
   };
 });
 
@@ -180,7 +190,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function startResize(
-  target: "explorer" | "settings" | "preview" | "annotation",
+  target: "explorer" | "settings" | "preview" | "annotation" | "editorSide",
   event: MouseEvent,
 ) {
   resizeTarget = target;
@@ -190,6 +200,12 @@ function startResize(
     ) as HTMLElement | null;
     annotationResizeRight =
       layout?.getBoundingClientRect().right ?? window.innerWidth;
+  }
+  if (target === "editorSide") {
+    const layout = (event.currentTarget as HTMLElement).closest(
+      ".editor-body-layout",
+    ) as HTMLElement | null;
+    editorSideResizeLeft = layout?.getBoundingClientRect().left ?? 0;
   }
   event.preventDefault();
   document.body.classList.add("drag-resizing");
@@ -229,6 +245,14 @@ function onResizeMove(event: MouseEvent) {
       annotationResizeRight - event.clientX,
       220,
       Math.min(620, maxAnnotationWidth),
+    );
+  } else if (resizeTarget === "editorSide") {
+    const editorRightReserve = previewVisible.value ? previewWidth.value + 220 : 420;
+    const maxEditorSideWidth = Math.max(260, width - editorSideResizeLeft - editorRightReserve);
+    editorSidePanelWidth.value = clamp(
+      event.clientX - editorSideResizeLeft,
+      220,
+      Math.min(560, maxEditorSideWidth),
     );
   }
 }
@@ -402,6 +426,31 @@ async function handleDiagnosticOpen(payload: { file: string; line: number }) {
   }
 }
 
+
+async function createProjectFromTemplate(templateId: string) {
+  try {
+    await store.createProjectFromTemplate(templateId);
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function createDailyNote() {
+  try {
+    await store.createDailyNote();
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function createLocalSnapshot() {
+  try {
+    await store.createLocalSnapshot();
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function handleLatexNavigate(payload: { kind: 'label' | 'bib' | 'file'; key: string }) {
   try {
     if (payload.kind === 'label') await store.jumpToLatexLabel(payload.key);
@@ -490,15 +539,21 @@ onBeforeUnmount(() => {
         <div v-if="editorAreaVisible" class="editor-column">
           <div class="editor-header">
             <div class="editor-header-left">
-              <button
-                v-if="editorOutlineAvailable"
-                class="toolbar-icon outline-toggle-button"
-                :class="{ active: sideWorkPanel === 'outline' }"
-                :title="sideWorkPanel === 'outline' ? '隐藏大纲' : '显示当前文件大纲'"
-                @click="sideWorkPanel = sideWorkPanel === 'outline' ? null : 'outline'"
-              >
-                ☷<small v-if="activeFileOutlineCount">{{ activeFileOutlineCount }}</small>
-              </button>
+              <div class="editor-sidebar-buttons" aria-label="编辑侧栏">
+                <button
+                  v-if="editorOutlineAvailable"
+                  class="toolbar-icon outline-toggle-button"
+                  :class="{ active: sideWorkPanel === 'outline' }"
+                  :title="sideWorkPanel === 'outline' ? '隐藏大纲' : '显示当前文件大纲'"
+                  @click="sideWorkPanel = sideWorkPanel === 'outline' ? null : 'outline'"
+                >
+                  ☷<small v-if="activeFileOutlineCount">{{ activeFileOutlineCount }}</small>
+                </button>
+                <button v-if="isLatexActive || activeDocument?.kind === 'bibtex'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'bib' }" title="参考文献" @click="sideWorkPanel = sideWorkPanel === 'bib' ? null : 'bib'">📚</button>
+                <button v-if="['latex','markdown'].includes(activeDocument?.kind || '')" class="toolbar-icon" :class="{ active: sideWorkPanel === 'snippets' }" title="片段" @click="sideWorkPanel = sideWorkPanel === 'snippets' ? null : 'snippets'">⌘</button>
+                <button v-if="activeDocument?.kind === 'markdown'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'export' }" title="导出" @click="sideWorkPanel = sideWorkPanel === 'export' ? null : 'export'">⇪</button>
+                <button class="toolbar-icon" :class="{ active: sideWorkPanel === 'tools' }" title="项目工具 / 模板 / 后续框架" @click="sideWorkPanel = sideWorkPanel === 'tools' ? null : 'tools'">⚙</button>
+              </div>
               <div class="editor-title">
                 <span>编辑</span>
                 <small>{{ activeDocument?.relativePath || activeDocument?.title || '未打开文档' }}</small>
@@ -506,9 +561,6 @@ onBeforeUnmount(() => {
             </div>
             <div class="editor-header-actions">
               <span class="writing-stats-pill" :title="'当前文件统计：' + activeWritingStatsLabel">{{ activeWritingStatsLabel }}</span>
-              <button v-if="isLatexActive || activeDocument?.kind === 'bibtex'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'bib' }" title="参考文献" @click="sideWorkPanel = sideWorkPanel === 'bib' ? null : 'bib'">☷</button>
-              <button v-if="['latex','markdown'].includes(activeDocument?.kind || '')" class="toolbar-icon" :class="{ active: sideWorkPanel === 'snippets' }" title="片段" @click="sideWorkPanel = sideWorkPanel === 'snippets' ? null : 'snippets'">⌘</button>
-              <button v-if="activeDocument?.kind === 'markdown'" class="toolbar-icon" :class="{ active: sideWorkPanel === 'export' }" title="导出" @click="sideWorkPanel = sideWorkPanel === 'export' ? null : 'export'">⇪</button>
               <button class="toolbar-icon" :class="{ active: bottomPanelVisible }" title="问题 / 输出 / 日志" @click="bottomPanelVisible = !bottomPanelVisible">⚠</button>
               <span
                 v-if="activeDiagnosticCount"
@@ -522,20 +574,43 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="editor-body-layout"
-            :class="{ 'outline-visible': !!sideWorkPanel }"
+            :class="{ 'side-panel-visible': !!sideWorkPanel }"
+            :style="editorBodyLayoutStyle"
           >
-            <EditorOutlinePanel
-              v-if="editorOutlineAvailable && sideWorkPanel === 'outline'"
-              :outline="latexIndex.outline"
-              :active="activeDocument"
-              :active-line="editorCursorLine"
-              @open="store.openLatexOutlineItem"
-              @close="sideWorkPanel = null"
+            <div v-if="sideWorkPanel" class="editor-side-panel-slot">
+              <EditorOutlinePanel
+                v-if="editorOutlineAvailable && sideWorkPanel === 'outline'"
+                :outline="latexIndex.outline"
+                :active="activeDocument"
+                :active-line="editorCursorLine"
+                @open="store.openLatexOutlineItem"
+                @close="sideWorkPanel = null"
+              />
+              <BibManagerPanel v-else-if="sideWorkPanel === 'bib'" :entries="latexIndex.citations" @open="store.jumpToBibEntry" @close="sideWorkPanel = null" />
+              <SnippetPanel v-else-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
+              <ExportPanel v-else-if="sideWorkPanel === 'export'" :active-kind="activeDocument?.kind" :busy="busy" @export-format="exportMarkdownFormat" @close="sideWorkPanel = null" />
+              <HistoryPanel v-else-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
+              <ProjectToolsPanel
+                v-else-if="sideWorkPanel === 'tools'"
+                :active-kind="activeDocument?.kind"
+                :workspace="workspace"
+                :writing-stats-label="activeWritingStatsLabel"
+                :latex-index="latexIndex"
+                :diagnostics="activeDocumentDiagnostics"
+                :busy="busy"
+                @create-template="createProjectFromTemplate"
+                @create-daily-note="createDailyNote"
+                @create-snapshot="createLocalSnapshot"
+                @export-format="exportMarkdownFormat"
+                @close="sideWorkPanel = null"
+              />
+            </div>
+            <div
+              v-if="sideWorkPanel"
+              class="resize-handle vertical editor-side-resize"
+              title="拖动调整编辑侧栏宽度"
+              @mousedown="startResize('editorSide', $event)"
             />
-            <BibManagerPanel v-if="sideWorkPanel === 'bib'" :entries="latexIndex.citations" @open="store.jumpToBibEntry" @close="sideWorkPanel = null" />
-            <SnippetPanel v-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
-            <ExportPanel v-if="sideWorkPanel === 'export'" :active-kind="activeDocument?.kind" :busy="busy" @export-format="exportMarkdownFormat" @close="sideWorkPanel = null" />
-            <HistoryPanel v-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
             <div class="editor-code-pane">
               <MarkdownEditor
                 v-model="activeText"

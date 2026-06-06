@@ -261,7 +261,7 @@ export const sampleLatex = `\\documentclass{article}
 \\usepackage{hyperref}
 
 \\title{LaTeX Test Document}
-\\author{Markdown LaTeX Git Desktop}
+\\author{Scholia Studio}
 \\date{\\today}
 
 \\begin{document}

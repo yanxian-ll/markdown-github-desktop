@@ -111,7 +111,7 @@ function onOwnerInput() {
         </button>
         <button class="ghost" :disabled="props.workspaceBusy || !props.workspace" @click="emit('refresh')">刷新</button>
       </div>
-      <p class="hint">用于从 GitHub 获取项目并推送修改。本地文件请在左侧“文档”栏点击 📂 打开。</p>
+      <p class="hint">用于从 GitHub 获取项目并推送修改。本地文件请在左侧“文档”栏点击打开按钮。</p>
     </section>
 
     <section class="panel-section">

@@ -2,7 +2,7 @@
 name = "markdown-latex-git-desktop"
 version = "0.7.0"
 description = "A cross-platform Markdown/LaTeX editor with local Git workspace and manual GitHub push"
-authors = ["Markdown LaTeX Git Desktop Contributors"]
+authors = ["Scholia Studio Contributors"]
 edition = "2021"
 license = "Apache-2.0"
 

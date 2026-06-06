@@ -58,6 +58,7 @@ import type {
 } from "../types/latexIntelligence";
 import { emptyLatexIndex } from "../types/latexIntelligence";
 import { computeWritingStats, formatWritingStats } from '../services/writingStats';
+import { BUILTIN_TEMPLATES } from '../services/templates';
 import {
   buildProjectLatexIndex,
   resolveIndexedFilePath,
@@ -2405,6 +2406,89 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+
+  async function createProjectFromTemplate(templateId: string) {
+    const template = BUILTIN_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) throw new Error(`未找到模板：${templateId}`);
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区，再应用模板。');
+    const defaultFolder = template.id;
+    const rawFolder = window.prompt('输入模板创建目录。留空会取消。', defaultFolder);
+    if (!rawFolder) return;
+    const baseFolder = normalizePath(rawFolder).replace(/^\/+|\/+$/g, '');
+    if (!baseFolder) return;
+    const existing = findNodeByPath(fileTree.value, baseFolder);
+    if (existing) {
+      const ok = window.confirm(`目录 ${baseFolder} 已存在，继续写入可能覆盖同名文件，是否继续？`);
+      if (!ok) return;
+    }
+    for (const file of template.files) {
+      const displayPath = `${baseFolder}/${normalizePath(file.path)}`;
+      await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), file.content);
+    }
+    status.value = `已从模板创建项目：${template.name}`;
+    await refreshWorkspace();
+    const mainPath = `${baseFolder}/${template.mainFile}`;
+    const node = findNodeByPath(fileTree.value, mainPath) || {
+      name: titleFromPath(mainPath),
+      path: mainPath,
+      kind: 'file' as const,
+      documentKind: kindFromPath(mainPath),
+      children: [],
+    };
+    await openWorkspaceFile(node);
+  }
+
+  async function createDailyNote() {
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const displayPath = `notes/daily/${yyyy}-${mm}-${dd}.md`;
+    const existing = findNodeByPath(fileTree.value, displayPath);
+    if (!existing) {
+      const content = `# ${yyyy}-${mm}-${dd} 写作记录\n\n## 今日目标\n\n- [ ] \n\n## 编辑记录\n\n- 当前文件：${activeDocument.value?.relativePath || activeDocument.value?.title || '未打开'}\n\n## 批注与待办\n\n- \n`;
+      await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), content);
+      await refreshWorkspace();
+    }
+    const node = findNodeByPath(fileTree.value, displayPath) || {
+      name: `${yyyy}-${mm}-${dd}.md`,
+      path: displayPath,
+      kind: 'file' as const,
+      documentKind: 'markdown' as const,
+      children: [],
+    };
+    await openWorkspaceFile(node);
+    status.value = existing ? `已打开每日笔记：${displayPath}` : `已创建每日笔记：${displayPath}`;
+  }
+
+  async function createLocalSnapshot() {
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const active = activeDocument.value;
+    const lines = [
+      '# 本地快照',
+      '',
+      `- 时间：${new Date().toLocaleString()}`,
+      `- 工作区：${workspace.value.localDir}`,
+      `- 当前文件：${active?.relativePath || active?.title || '未打开'}`,
+      `- 当前字数：${activeWritingStatsLabel.value}`,
+      '',
+      '## 说明',
+      '',
+      '这是 v0.9 框架版的轻量快照 manifest。后续 TODO：复制文件内容、生成 diff、支持恢复。',
+      '',
+      '## 未提交/变更',
+      '',
+      ...(gitEntries.value.length ? gitEntries.value.map((entry) => `- ${entry.code} ${entry.path}`) : ['- 当前没有 Git 变更记录，或这是非 Git 本地工作区。']),
+      '',
+    ];
+    const path = `.paper-notes/snapshots/${timestamp}/manifest.md`;
+    await writeWorkspaceFile(workspace.value.localDir, path, lines.join('\n'));
+    status.value = `已创建轻量快照：${path}`;
+    await refreshWorkspace();
+  }
+
   async function setPdfRenderQuality(value: number) {
     pdfRenderQuality.value = Math.min(
       1.25,
@@ -2510,6 +2594,9 @@ export const useAppStore = defineStore("app", () => {
     updateAnnotationMessage,
     exportAnnotationsMarkdown,
     exportMarkdownFormat,
+    createProjectFromTemplate,
+    createDailyNote,
+    createLocalSnapshot,
     removeAnnotation,
     focusAnnotation,
     syncMarkdownPreviewFromEditor,

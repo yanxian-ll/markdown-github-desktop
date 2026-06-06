@@ -169,7 +169,12 @@ const TreeNode: any = defineComponent({
       </div>
       <div class="sidebar-header-actions">
         <div class="open-local-menu-wrap">
-          <button class="icon-button primary" title="打开本地文档" @click.stop="openMenuVisible = !openMenuVisible">📂</button>
+          <button class="icon-button" title="打开本地文档" aria-label="打开本地文档" @click.stop="openMenuVisible = !openMenuVisible">
+            <svg class="toolbar-svg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3.75 6.75h6.1l1.45 1.75h8.95v8.75a2 2 0 0 1-2 2H5.75a2 2 0 0 1-2-2V6.75Z" />
+              <path d="M3.75 9h16.5" />
+            </svg>
+          </button>
           <div v-if="openMenuVisible" class="open-local-menu" @click.stop>
             <button @click="openMenuVisible = false; emit('openLocal', 'folder')">打开文件夹</button>
             <button @click="openMenuVisible = false; emit('openLocal', 'file')">打开文件</button>
@@ -183,7 +188,7 @@ const TreeNode: any = defineComponent({
 
     <div class="tree-drop-root" :class="{ 'drag-over': rootDragOver }" @click="clearSelection" @dragover.prevent="rootDragOver = !!draggedNode" @dragleave="rootDragOver = false" @drop.prevent="dropToRoot">
       <div v-if="!props.tree.length" class="empty-state">
-        当前没有打开文档。点击上方 📂 打开本地文件或文件夹，也可以在设置中获取/更新 GitHub 工作区。
+        当前没有打开文档。点击上方打开按钮选择本地文件或文件夹，也可以在设置中获取/更新 GitHub 工作区。
       </div>
 
       <ul v-else class="tree-root" @click.stop>

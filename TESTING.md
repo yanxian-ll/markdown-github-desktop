@@ -1,4 +1,4 @@
-# v0.8.0 测试记录与步骤
+# v0.9.0 测试记录与步骤
 
 ## 1. 安装和静态检查
 
@@ -7,7 +7,7 @@ npm install
 npx vue-tsc --noEmit
 ```
 
-本次容器中 `vue-tsc` 已通过。`vite build` 在当前容器环境的 transforming 阶段超时；`vitest run` 在当前容器中也未能退出，初步判断与测试运行环境/异步渲染依赖有关，需要本机复核。建议本机继续执行：
+本次容器中 `vue-tsc` 已通过。建议本机继续执行：
 
 ```bash
 npx vite build
@@ -16,10 +16,18 @@ cd src-tauri
 cargo check
 ```
 
+Pandoc/LaTeX 相关测试前确认：
+
+```bash
+pandoc --version
+xelatex --version
+latexmk --version
+```
+
 ## 2. 基础打开和编辑
 
 1. 运行：`npm run tauri:dev`。
-2. 点击左侧文档区 📂。
+2. 点击左侧文档区的打开按钮。
 3. 测试打开文件夹和打开单个文件。
 4. 打开 `.tex`、`.md`、`.bib`、图片、PDF，确认布局自动切换。
 5. 选中文字按 `Ctrl/Cmd+C`，确认复制选区；不选文字按 `Ctrl/Cmd+C`，确认复制当前行。
@@ -89,7 +97,7 @@ align
 
 Markdown 内容：
 
-```md
+````md
 # Demo
 
 Inline math $E=mc^2$.
@@ -103,7 +111,7 @@ src: figures/demo.png
 caption: Demo figure
 label: fig:demo
 ```
-```
+````
 
 测试：
 
@@ -128,15 +136,35 @@ label: fig:demo
 3. 搜索 key/作者/标题/年份。
 4. 点击条目，确认跳转到 `.bib` 对应行。
 
-## 9. 历史框架测试
+## 9. v0.9 项目工具测试
+
+1. 点击编辑区 topbar 的 ⚙ 项目工具按钮。
+2. 在“模板”页选择 `LaTeX 基础论文`。
+3. 输入目录名，例如 `demo-paper`。
+4. 确认工作区中生成 `demo-paper/main.tex`、`chapters/`、`refs.bib`、`figures/`。
+5. 确认自动打开 `demo-paper/main.tex`。
+6. 在“导出”页打开 Markdown 文件后测试默认导出 profile。
+7. 在“写作”页点击“打开今天”，确认生成或打开 `notes/daily/YYYY-MM-DD.md`。
+8. 在“写作”页点击“创建快照”，确认生成 `.paper-notes/snapshots/<time>/manifest.md`。
+9. 在“框架”页确认 Zotero、DOI 导入、发布、可视化、PDF 笔记等后续框架入口存在。
+
+## 10. 历史框架测试
 
 1. GitHub 工作区修改文件后，点击底部“历史”。
 2. 面板应显示当前 Git 变更列表。
 3. 本地非 Git 工作区会显示本地快照框架提示。
 
-## 10. 批注测试
+## 11. 批注测试
 
 1. PDF 中选中文字，点击“批注”。
 2. Markdown 预览中选中文字，点击“批注”。
 3. 添加回复、编辑评论、解决/重新打开。
 4. 导出当前文件批注 Markdown。
+
+
+## Scholia Studio 命名和打开图标检查
+
+1. 启动应用后，窗口标题和顶部品牌应显示 `Scholia Studio`。
+2. 左侧“文档”栏的打开入口应为线性文件夹图标，不再使用 emoji 文件夹。
+3. 点击打开入口仍应弹出“打开文件夹 / 打开文件”菜单。
+4. 打开文件或文件夹后，原有编辑、预览、批注功能应保持可用。

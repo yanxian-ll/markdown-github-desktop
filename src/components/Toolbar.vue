@@ -23,11 +23,11 @@ const emit = defineEmits<{
   <header class="toolbar">
     <div class="brand">
       <button class="toolbar-icon" :title="props.explorerVisible ? '隐藏文档树' : '显示文档树'" @click="emit('toggleExplorer')">
-        {{ props.explorerVisible ? '☰' : '📁' }}
+        {{ props.explorerVisible ? '☰' : '▣' }}
       </button>
-      <span class="logo">✦</span>
+      <span class="logo">S</span>
       <div>
-        <strong>Markdown / LaTeX 批注写作</strong>
+        <strong>Scholia Studio</strong>
         <small>{{ props.active?.relativePath || props.active?.title || '未选择文档' }}{{ props.active?.dirty ? ' · 未保存' : '' }}</small>
       </div>
     </div>

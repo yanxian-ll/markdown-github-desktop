@@ -1,9 +1,9 @@
 {
-  "name": "markdown-latex-git-desktop",
+  "name": "scholia-studio",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.2",
   "type": "module",
-  "description": "A Tauri 2 + Vue 3 desktop Markdown/LaTeX editor with local Git workspace and manual GitHub push.",
+  "description": "A Tauri 2 + Vue 3 scholarly Markdown/LaTeX writing, preview, annotation, export, and project workspace.",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
