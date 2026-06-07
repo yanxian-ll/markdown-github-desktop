@@ -374,17 +374,19 @@ npm run test
 - 模板依赖的 \`.cls\`、\`.sty\`、图片或 \`.bib\` 文件缺失。
 - LaTeX 源码本身有错误。
 
-可以先在终端里进入论文目录，手动运行：
+可以先在终端里进入论文目录，手动运行。中文论文、CTeX、fontspec 或 CSUthesis 模板优先使用 XeLaTeX：
 
 ~~~bash
-latexmk -pdf -synctex=1 main.tex
+latexmk -xelatex -interaction=nonstopmode -synctex=1 -file-line-error main.tex
 ~~~
 
-如果使用中文论文或 XeLaTeX 模板，可以尝试：
+如果是纯英文且模板明确要求 pdfLaTeX，再使用：
 
 ~~~bash
-latexmk -xelatex -synctex=1 main.tex
+latexmk -pdf -interaction=nonstopmode -synctex=1 -file-line-error main.tex
 ~~~
+
+如果日志只显示 “gave an error in previous invocation of latexmk”，先清理辅助文件后重建；应用内快捷键是 Ctrl/Cmd+Alt+K。
 
 ### 8.2 Pandoc 导出失败怎么办？
 

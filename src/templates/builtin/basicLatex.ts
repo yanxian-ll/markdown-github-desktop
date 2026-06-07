@@ -52,6 +52,14 @@ export function createBasicLatexTemplate(): BuiltinTemplate {
       { path: 'chapters/experiments.tex', content: '\\section{Experiments}\n这里写实验。\\label{sec:experiments}\n' },
       { path: 'chapters/conclusion.tex', content: '\\section{Conclusion}\n这里写结论。\\label{sec:conclusion}\n' },
       { path: 'refs.bib', content: '@article{sample2026,\n  title={A Sample Paper},\n  author={Author, Alice},\n  year={2026},\n  journal={Journal}\n}\n' },
+      {
+        path: 'latexmkrc',
+        content: String.raw`# This template uses CTeX and should be built with XeLaTeX.
+$pdf_mode = 5;
+$xelatex = 'xelatex -interaction=nonstopmode -synctex=1 -file-line-error %O %S';
+$bibtex_use = 2;
+`,
+      },
       { path: 'figures/.gitkeep', content: '' },
     ],
     roadmap: ['后续可增加 ACM/IEEE/Springer 原始模板导入。', '支持用户模板目录和模板市场。'],

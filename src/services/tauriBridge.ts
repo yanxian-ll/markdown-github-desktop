@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { FileNode, GitStatusEntry, GitWorkspace, LatexBuildResult, PersistedAppState, PdfSyncPoint, TexSourcePoint } from '../types/app';
+import type { EnvironmentToolCheck, FileNode, GitStatusEntry, GitWorkspace, LatexBuildResult, PersistedAppState, PdfSyncPoint, TexSourcePoint, ToolPathSettings } from '../types/app';
 
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -92,6 +92,11 @@ export async function pickLocalFile(): Promise<string | null> {
   return invoke<string | null>('pick_local_file');
 }
 
+export async function createSampleWorkspace(): Promise<string> {
+  if (!isTauriRuntime()) throw new Error('示例工作区需要在 Tauri 桌面环境中创建。');
+  return invoke<string>('create_sample_workspace');
+}
+
 export async function listWorkspaceFiles(rootDir: string, rootPath = ''): Promise<FileNode[]> {
   if (!isTauriRuntime()) return [];
   return invoke<FileNode[]>('list_workspace_files', { rootDir, rootPath });
@@ -165,21 +170,42 @@ export async function commitAndPush(rootDir: string, branch: string, message: st
   return invoke<string>('commit_and_push', { rootDir, branch, message, token });
 }
 
-export async function buildLatex(rootDir: string, relativePath: string): Promise<LatexBuildResult> {
+export async function buildLatex(rootDir: string, relativePath: string, toolPaths?: ToolPathSettings): Promise<LatexBuildResult> {
   if (!isTauriRuntime()) throw new Error('LaTeX 构建需要在 Tauri 桌面环境中运行。');
-  return invoke<LatexBuildResult>('build_latex', { rootDir, relativePath });
+  return invoke<LatexBuildResult>('build_latex', { rootDir, relativePath, toolPaths });
 }
 
-export async function buildMarkdownPandoc(rootDir: string, relativePath: string): Promise<LatexBuildResult> {
+export async function buildMarkdownPandoc(rootDir: string, relativePath: string, toolPaths?: ToolPathSettings): Promise<LatexBuildResult> {
   if (!isTauriRuntime()) throw new Error('Markdown → PDF 需要在 Tauri 桌面环境中运行，并安装 Pandoc。');
-  return invoke<LatexBuildResult>('build_markdown_pandoc', { rootDir, relativePath });
+  return invoke<LatexBuildResult>('build_markdown_pandoc', { rootDir, relativePath, toolPaths });
 }
 
 export type PandocExportFormat = 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer';
 
-export async function exportMarkdownPandoc(rootDir: string, relativePath: string, format: PandocExportFormat): Promise<LatexBuildResult> {
+export async function exportMarkdownPandoc(rootDir: string, relativePath: string, format: PandocExportFormat, toolPaths?: ToolPathSettings): Promise<LatexBuildResult> {
   if (!isTauriRuntime()) throw new Error('Pandoc 多格式导出需要在 Tauri 桌面环境中运行，并安装 Pandoc。');
-  return invoke<LatexBuildResult>('export_markdown_pandoc', { rootDir, relativePath, format });
+  return invoke<LatexBuildResult>('export_markdown_pandoc', { rootDir, relativePath, format, toolPaths });
+}
+
+export async function checkEnvironment(toolPaths?: ToolPathSettings): Promise<EnvironmentToolCheck[]> {
+  if (!isTauriRuntime()) {
+    return ([
+      ['pandoc', 'Pandoc'],
+      ['xelatex', 'XeLaTeX'],
+      ['latexmk', 'latexmk'],
+      ['synctex', 'SyncTeX'],
+      ['git', 'Git'],
+    ] as const).map(([id, label]) => ({
+      id,
+      label,
+      ok: false,
+      required: id === 'pandoc' || id === 'xelatex' || id === 'git',
+      command: toolPaths?.[id] || id,
+      error: '浏览器预览模式无法检测本机命令，请在 Tauri 桌面应用中使用。',
+      installHint: '请在桌面应用中运行环境检查。',
+    }));
+  }
+  return invoke<EnvironmentToolCheck[]>('check_environment', { toolPaths });
 }
 
 export async function findLatexPdf(rootDir: string, relativePath: string): Promise<string | null> {
@@ -197,12 +223,12 @@ export async function openPdf(path: string): Promise<void> {
   await invoke('open_pdf', { path });
 }
 
-export async function synctexForward(rootDir: string, relativePath: string, line: number, column: number): Promise<PdfSyncPoint> {
+export async function synctexForward(rootDir: string, relativePath: string, line: number, column: number, toolPaths?: ToolPathSettings): Promise<PdfSyncPoint> {
   if (!isTauriRuntime()) throw new Error('SyncTeX 正向定位需要在 Tauri 桌面环境中运行。');
-  return invoke<PdfSyncPoint>('synctex_forward', { rootDir, relativePath, line, column });
+  return invoke<PdfSyncPoint>('synctex_forward', { rootDir, relativePath, line, column, toolPaths });
 }
 
-export async function synctexReverse(rootDir: string, pdfPath: string, page: number, x: number, y: number): Promise<TexSourcePoint> {
+export async function synctexReverse(rootDir: string, pdfPath: string, page: number, x: number, y: number, toolPaths?: ToolPathSettings): Promise<TexSourcePoint> {
   if (!isTauriRuntime()) throw new Error('SyncTeX 反向定位需要在 Tauri 桌面环境中运行。');
-  return invoke<TexSourcePoint>('synctex_reverse', { rootDir, pdfPath, page, x, y });
+  return invoke<TexSourcePoint>('synctex_reverse', { rootDir, pdfPath, page, x, y, toolPaths });
 }

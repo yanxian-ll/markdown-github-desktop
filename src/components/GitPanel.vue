@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue';
-import type { GitStatusEntry, GitWorkspace, LatexBuildResult, MarkdownRenderPreset } from '../types/app';
+import { reactive, ref, watch } from 'vue';
+import type { EnvironmentToolCheck, EnvironmentToolId, GitStatusEntry, GitWorkspace, LatexBuildResult, MarkdownRenderPreset, ToolPathSettings, ProjectSettings, ExportProfile } from '../types/app';
 
 const props = defineProps<{
   visible: boolean;
@@ -16,6 +16,12 @@ const props = defineProps<{
   latexActive?: boolean;
   pdfRenderQuality?: number;
   markdownRenderPreset?: MarkdownRenderPreset;
+  toolPaths?: ToolPathSettings;
+  environmentChecks?: EnvironmentToolCheck[];
+  recoveryWarning?: string;
+  draftCount?: number;
+  projectSettings?: ProjectSettings;
+  exportProfiles?: ExportProfile[];
 }>();
 
 const emit = defineEmits<{
@@ -30,6 +36,11 @@ const emit = defineEmits<{
   openPdf: [];
   updatePdfRenderQuality: [value: number];
   updateMarkdownRenderPreset: [value: MarkdownRenderPreset];
+  setToolPath: [id: EnvironmentToolId, value: string];
+  checkEnvironment: [];
+  createSnapshot: [];
+  exportDebug: [];
+  updateProjectSetting: [key: keyof ProjectSettings, value: ProjectSettings[keyof ProjectSettings]];
   hide: [];
 }>();
 
@@ -41,7 +52,45 @@ const form = reactive<GitWorkspace>({
   rootPath: '',
 });
 const tokenForm = reactive({ token: '' });
+const activeTab = ref<'environment' | 'git' | 'author' | 'pdf' | 'export' | 'privacy'>('environment');
+const settingsTabs: Array<{ id: typeof activeTab.value; label: string }> = [
+  { id: 'environment', label: '环境' },
+  { id: 'git', label: 'Git' },
+  { id: 'author', label: '作者' },
+  { id: 'pdf', label: 'PDF/LaTeX' },
+  { id: 'export', label: '导出' },
+  { id: 'privacy', label: '隐私' },
+];
 
+function updateProjectText(key: keyof ProjectSettings, event: Event) {
+  const target = event.target as HTMLInputElement | HTMLSelectElement | null;
+  if (!target) return;
+  emit('updateProjectSetting', key, target.value as ProjectSettings[keyof ProjectSettings]);
+}
+
+function onAuthorNameInput(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  emit('updateAuthorName', target?.value || '');
+}
+
+const environmentToolFields: Array<{ id: EnvironmentToolId; label: string; placeholder: string }> = [
+  { id: 'pandoc', label: 'Pandoc', placeholder: 'pandoc 或完整路径，例如 C:/Program Files/Pandoc/pandoc.exe' },
+  { id: 'xelatex', label: 'XeLaTeX', placeholder: 'xelatex 或完整路径' },
+  { id: 'latexmk', label: 'latexmk', placeholder: 'latexmk 或完整路径' },
+  { id: 'synctex', label: 'SyncTeX', placeholder: 'synctex 或完整路径' },
+  { id: 'git', label: 'Git', placeholder: 'git 或完整路径' },
+];
+
+function onToolPathInput(id: EnvironmentToolId, event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  if (!target) return;
+  emit('setToolPath', id, target.value);
+}
+
+function environmentCheckClass(check: EnvironmentToolCheck) {
+  if (check.ok) return 'ok';
+  return check.required ? 'error' : 'warning';
+}
 
 const markdownRenderPresets: Array<{ id: MarkdownRenderPreset; name: string; description: string }> = [
   { id: 'default', name: '默认', description: '均衡的编辑预览风格，适合日常记录。' },
@@ -106,10 +155,13 @@ function onHeaderDblclick(event: MouseEvent) {
     <div class="settings-header" title="双击关闭设置栏" @dblclick="onHeaderDblclick">
       <div>
         <h2>设置</h2>
-        <small>GitHub、本地工作区、LaTeX 构建</small>
+        <small>环境、Git、作者、PDF/LaTeX、导出、隐私</small>
       </div>
     </div>
-    <section class="panel-section">
+    <nav class="settings-tabs" aria-label="设置分类">
+      <button v-for="tab in settingsTabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">{{ tab.label }}</button>
+    </nav>
+    <section v-show="activeTab === 'git'" class="panel-section">
       <h3>GitHub Token</h3>
       <p v-if="props.userHint" class="connected">{{ props.userHint }}</p>
       <div class="field-stack">
@@ -123,7 +175,7 @@ function onHeaderDblclick(event: MouseEvent) {
       </div>
     </section>
 
-    <section class="panel-section">
+    <section v-show="activeTab === 'git'" class="panel-section">
       <h3>GitHub 工作区</h3>
       <div class="grid-form one-col">
         <label>用户名<input v-model="form.owner" placeholder="用于 GitHub，也作为批注作者" @input="onOwnerInput" /></label>
@@ -141,7 +193,7 @@ function onHeaderDblclick(event: MouseEvent) {
       <p class="hint">用于从 GitHub 获取项目并推送修改。本地文件请在左侧“文档”栏点击打开按钮。</p>
     </section>
 
-    <section class="panel-section">
+    <section v-show="activeTab === 'git'" class="panel-section">
       <div class="tree-header">
         <h3>Git 状态</h3>
         <span>{{ props.gitEntries.length }}</span>
@@ -152,7 +204,80 @@ function onHeaderDblclick(event: MouseEvent) {
       </div>
     </section>
 
-    <section class="panel-section">
+    <section v-show="activeTab === 'author'" class="panel-section author-section">
+      <h3>作者与批注身份</h3>
+      <div class="grid-form one-col">
+        <label>作者 / 批注用户名<input :value="props.commentAuthorName || ''" placeholder="你的名字" @input="onAuthorNameInput" /></label>
+      </div>
+      <p class="hint">用于每日记录、批注回复、解决说明和项目元数据。</p>
+    </section>
+
+    <section v-show="activeTab === 'export'" class="panel-section project-settings-section">
+      <h3>项目主文件</h3>
+      <div class="grid-form one-col">
+        <label>主 TeX 文件<input :value="props.projectSettings?.mainTexFile || ''" placeholder="paper/main.tex" @input="updateProjectText('mainTexFile', $event)" /></label>
+        <label>主 Markdown 文件<input :value="props.projectSettings?.mainMarkdownFile || ''" placeholder="paper/paper.md" @input="updateProjectText('mainMarkdownFile', $event)" /></label>
+        <label>构建命令
+          <select :value="props.projectSettings?.buildCommand || 'auto'" @change="updateProjectText('buildCommand', $event)">
+            <option value="auto">自动</option>
+            <option value="latexmk">latexmk</option>
+            <option value="xelatex">xelatex</option>
+            <option value="pdflatex">pdflatex</option>
+            <option value="lualatex">lualatex</option>
+          </select>
+        </label>
+        <label>Pandoc profile<input :value="props.projectSettings?.pandocProfileId || props.projectSettings?.exportProfile || 'pdf'" placeholder="pdf / docx / html" @input="updateProjectText('pandocProfileId', $event)" /></label>
+      </div>
+      <div class="export-profile-list">
+        <article v-for="profile in props.exportProfiles || []" :key="profile.id" class="status-entry">
+          <code>{{ profile.format.toUpperCase() }}</code>
+          <span><strong>{{ profile.name }}</strong><small>{{ profile.description || profile.args.join(' ') || '默认参数' }}</small></span>
+        </article>
+      </div>
+    </section>
+
+    <section v-if="props.recoveryWarning" v-show="activeTab === 'privacy'" class="panel-section recovery-section">
+      <h3>异常恢复</h3>
+      <p class="warning-text">{{ props.recoveryWarning }}</p>
+      <p class="hint">检测到 {{ props.draftCount || 0 }} 份可恢复草稿。打开对应文件后可继续编辑，正常保存会自动清理该文件的草稿。</p>
+    </section>
+
+    <section v-show="activeTab === 'environment'" class="panel-section environment-section">
+      <div class="tree-header">
+        <h3>构建环境</h3>
+        <button class="ghost mini" :disabled="props.busy || props.latexBusy" @click="emit('checkEnvironment')">检查</button>
+      </div>
+      <div class="field-stack">
+        <label v-for="tool in environmentToolFields" :key="tool.id">
+          {{ tool.label }} 路径
+          <input :value="props.toolPaths?.[tool.id] || ''" :placeholder="tool.placeholder" @input="onToolPathInput(tool.id, $event)" />
+        </label>
+      </div>
+      <div v-if="props.environmentChecks?.length" class="environment-checks">
+        <div v-for="check in props.environmentChecks" :key="check.id" class="status-entry tool-check" :class="environmentCheckClass(check)">
+          <code>{{ check.ok ? 'OK' : (check.required ? 'ERR' : 'MISS') }}</code>
+          <span>
+            <strong>{{ check.label }}</strong>
+            <small>{{ check.command }}</small>
+            <small v-if="check.version">{{ check.version }}</small>
+            <small v-else-if="check.error">{{ check.error }}</small>
+            <small v-if="!check.ok" class="install-hint">{{ check.installHint }}</small>
+          </span>
+        </div>
+      </div>
+      <p class="hint">留空时使用系统 PATH。手动路径会持久保存，并用于 Pandoc、LaTeX 构建和 SyncTeX 定位。</p>
+    </section>
+
+    <section v-show="activeTab === 'privacy'" class="panel-section safety-section">
+      <h3>安全与诊断</h3>
+      <div class="button-row wrap">
+        <button class="ghost" :disabled="props.workspaceBusy" @click="emit('createSnapshot')">创建本地快照</button>
+        <button class="ghost" :disabled="props.workspaceBusy" @click="emit('exportDebug')">导出诊断包</button>
+      </div>
+      <p class="hint">快照会备份文本源文件和批注元数据；诊断包包含应用状态、环境检查、构建日志和系统信息，便于排查问题。</p>
+    </section>
+
+    <section v-show="activeTab === 'pdf'" class="panel-section">
       <h3>PDF 预览</h3>
       <label class="range-field">
         <span>预览分辨率：{{ Math.round((props.pdfRenderQuality ?? 0.72) * 100) }}%</span>
@@ -169,7 +294,7 @@ function onHeaderDblclick(event: MouseEvent) {
     </section>
 
 
-    <section class="panel-section markdown-render-section">
+    <section v-show="activeTab === 'export'" class="panel-section markdown-render-section">
       <h3>Markdown 渲染</h3>
       <label class="select-field">
         <span>预设风格</span>
@@ -193,12 +318,12 @@ function onHeaderDblclick(event: MouseEvent) {
       <p class="hint">只影响软件内 Markdown 预览，不改动源文件，也不影响 Pandoc 导出。</p>
     </section>
 
-    <section class="panel-section latex-section">
-      <h3>LaTeX</h3>
-      <p class="hint">支持 .tex、.bib、.cls/.sty 和图片资源。建议安装 latexmk；未安装时会自动回退到 pdflatex 构建流程。</p>
+    <section v-show="activeTab === 'pdf'" class="panel-section latex-section">
+      <h3>LaTeX 构建</h3>
+      <p class="hint">支持 .tex、.bib、.cls/.sty 和图片资源。建议安装 latexmk；未安装时会自动回退到 pdflatex 构建流程。快捷键：构建 <kbd>Ctrl/Cmd+B</kbd>，清理辅助文件 <kbd>Ctrl/Cmd+Alt+K</kbd>。</p>
       <div class="button-row wrap">
         <button :disabled="props.latexBusy || !props.latexActive" @click="emit('buildLatex')">{{ props.latexBusy ? '构建中…' : '构建 PDF' }}</button>
-        <button class="ghost" :disabled="props.latexBusy || !props.latexActive" @click="emit('cleanLatex')">清理辅助文件</button>
+        <button class="ghost" :disabled="props.latexBusy || !props.latexActive" title="快捷键 Ctrl/Cmd+Alt+K" @click="emit('cleanLatex')">清理辅助文件</button>
       </div>
       <div v-if="props.latexResult" class="latex-result" :class="{ ok: props.latexResult.ok }">
         <strong>{{ props.latexResult.ok ? '构建成功' : '构建失败' }}</strong>

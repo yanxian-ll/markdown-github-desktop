@@ -33,6 +33,8 @@ import {
   writeWorkspaceAnnotations,
   writeWorkspaceFile,
   saveTextFileWithDialog,
+  checkEnvironment,
+  createSampleWorkspace,
 } from "../services/tauriBridge";
 import type {
   DocumentKind,
@@ -51,6 +53,15 @@ import type {
   TexSourcePoint,
   PersistedAppState,
   MarkdownRenderPreset,
+  EnvironmentToolCheck,
+  ToolPathSettings,
+  LayoutSettings,
+  ProjectSettings,
+  ExportProfile,
+  FirstRunMode,
+  ResearchFlowStepStatus,
+  AnnotationExportFormat,
+  BibEntryPayload,
 } from "../types/app";
 import type {
   BibEntryItem,
@@ -67,6 +78,9 @@ import {
 } from "../services/latexIntelligence";
 
 const GITHUB_TOKEN_ACCOUNT = "github-token";
+const MAX_PERSISTED_DOCUMENT_CHARS = 500_000;
+const MAX_INLINE_PREVIEW_CHARS = 300_000;
+
 const COMMON_EXTENSIONS = [
   "md",
   "markdown",
@@ -170,12 +184,18 @@ function emptyState(): PersistedAppState {
     editor: {
       darkMode: true,
       vimMode: false,
-      previewVisible: true,
+      previewVisible: false,
       explorerVisible: true,
       gitPanelVisible: true,
       pdfPanelVisible: true,
       pdfRenderQuality: 0.72,
+      markdownRenderPreset: "default",
+      toolPaths: {},
     },
+    layout: defaultLayoutSettings(),
+    projectSettings: defaultProjectSettings(),
+    exportProfiles: defaultExportProfiles(),
+    recovery: { shutdownClean: true },
   };
 }
 
@@ -261,6 +281,85 @@ function isoWeekLabel(date: Date) {
   firstThursday.setDate(firstThursday.getDate() - firstDayNumber + 3);
   const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * 24 * 60 * 60 * 1000));
   return `${target.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function defaultLayoutSettings(): LayoutSettings {
+  return {
+    explorerWidth: 280,
+    templatePanelWidth: 340,
+    settingsWidth: 360,
+    previewWidth: 560,
+    annotationPanelWidth: 300,
+    bottomPanelHeight: 260,
+    editorFontSize: 14,
+    editorSidePanelWidths: {
+      workflow: 340,
+      outline: 280,
+      bib: 360,
+      snippets: 320,
+      history: 320,
+    },
+  };
+}
+
+function mergeLayoutSettings(saved?: Partial<LayoutSettings>): LayoutSettings {
+  const fallback = defaultLayoutSettings();
+  return {
+    ...fallback,
+    ...saved,
+    editorSidePanelWidths: {
+      ...fallback.editorSidePanelWidths,
+      ...(saved?.editorSidePanelWidths || {}),
+    },
+  };
+}
+
+function defaultProjectSettings(): ProjectSettings {
+  return {
+    projectType: "plain",
+    exportProfile: "pdf",
+    pandocProfileId: "pdf",
+    buildCommand: "auto",
+    pdfRenderQuality: 0.72,
+    privacy: {
+      persistLargePreviews: false,
+      maxPersistedTextChars: MAX_PERSISTED_DOCUMENT_CHARS,
+    },
+    researchFlowPaths: {
+      dailyDir: "notes/daily",
+      weeklyDir: "notes/weekly",
+      evidenceIndex: "research/evidence-index.md",
+      paperOutline: "paper/paper-outline.md",
+      reviewSummary: ".paper-notes/review-summary.md",
+    },
+  };
+}
+
+function defaultExportProfiles(): ExportProfile[] {
+  return [
+    { id: "pdf", name: "PDF", format: "pdf", args: ["--pdf-engine=xelatex"], description: "Pandoc PDF，默认使用 XeLaTeX" },
+    { id: "docx", name: "Word DOCX", format: "docx", args: [], description: "导出给导师/合作者审阅" },
+    { id: "html", name: "HTML", format: "html", args: ["--standalone"], description: "单文件网页预览" },
+    { id: "epub", name: "EPUB", format: "epub", args: [], description: "电子书草稿" },
+    { id: "latex", name: "LaTeX", format: "latex", args: ["-t", "latex"], description: "从 Markdown 生成 .tex" },
+    { id: "beamer", name: "Beamer PDF", format: "beamer", args: ["-t", "beamer", "--pdf-engine=xelatex"], description: "Markdown 到 Beamer 幻灯片" },
+  ];
+}
+
+function safeDraftKey(relativePath: string) {
+  return normalizePath(relativePath).replace(/[^a-zA-Z0-9._-]+/g, "__");
+}
+
+function isTextDocumentKind(kind?: DocumentKind) {
+  return ["markdown", "latex", "bibtex", "text"].includes(kind || "");
+}
+
+function flattenFileNodes(nodes: FileNode[]): FileNode[] {
+  return nodes.flatMap((node) => [node, ...flattenFileNodes(node.children)]);
+}
+
+function yamlList(values: string[]) {
+  return values.length ? values.map((value) => `  - ${value}`).join("\n") : "  - ";
 }
 
 function makeAnnotationMessage(
@@ -524,6 +623,11 @@ function reviewItemFromAnnotation(item: PaperAnnotation): PaperReviewItem {
       item.anchorConfidence || (item.texAnchor ? "stable" : "unknown"),
     needs_review: !!item.needsReview,
     needs_review_reason: item.needsReviewReason,
+    task_marker: item.taskMarker,
+    resolved_at: item.resolvedAt,
+    resolved_by: item.resolvedBy,
+    resolved_revision: item.resolvedRevision,
+    resolution_note: item.resolutionNote,
     created_at: item.createdAt,
     updated_at: item.updatedAt,
   };
@@ -666,6 +770,75 @@ function serializeAnnotationsJsonl(items: PaperAnnotation[]): string {
   );
 }
 
+function csvCell(value: unknown): string {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function serializeAnnotationsCsv(items: PaperAnnotation[]): string {
+  const header = [
+    "id",
+    "status",
+    "type",
+    "file",
+    "line",
+    "anchor_confidence",
+    "needs_review",
+    "comment",
+    "selected_text",
+    "resolution_note",
+    "updated_at",
+  ];
+  const rows = items
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((item) => [
+      item.id,
+      item.status,
+      item.type,
+      item.texAnchor?.file || item.markdownAnchor?.file || item.documentPath || item.pdfAnchor?.pdfPath || "",
+      item.texAnchor?.line || item.pdfAnchor?.page || "",
+      item.anchorConfidence || "unknown",
+      item.needsReview ? "true" : "false",
+      annotationCommentText(item),
+      item.selectedText || item.markdownAnchor?.textQuote || item.pdfAnchor?.textQuote || item.texAnchor?.sourceText || item.sourceText || "",
+      item.resolutionNote || "",
+      item.updatedAt,
+    ]);
+  return [header.map(csvCell).join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\n") + "\n";
+}
+
+function escapeLatexTodo(text: string): string {
+  return text
+    .replace(/\\/g, "\\textbackslash{}")
+    .replace(/[{}]/g, (char) => `\\${char}`)
+    .replace(/#/g, "\\#")
+    .replace(/%/g, "\\%")
+    .replace(/&/g, "\\&")
+    .replace(/_/g, "\\_")
+    .replace(/\$/g, "\\$")
+    .replace(/\^/g, "\\textasciicircum{}")
+    .replace(/~/g, "\\textasciitilde{}");
+}
+
+function serializeAnnotationsLatexTodos(items: PaperAnnotation[]): string {
+  const lines = [
+    "% Generated by Scholia Studio. Add \\usepackage{todonotes} in your preamble.",
+    "",
+  ];
+  items
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .forEach((item) => {
+      const location = item.texAnchor?.file
+        ? `${item.texAnchor.file}${item.texAnchor.line ? `:${item.texAnchor.line}` : ""}`
+        : item.documentPath || item.pdfAnchor?.pdfPath || "PDF";
+      const body = `${location} · ${annotationCommentText(item) || item.type}`;
+      lines.push(`\\todo[inline]{${escapeLatexTodo(body)}}`);
+    });
+  return lines.join("\n") + "\n";
+}
+
 function supportedPathOrDefault(rawPath: string): string {
   const wantsFolder = /[\\/]$/.test(rawPath.trim());
   const normalized = normalizePath(rawPath);
@@ -695,7 +868,7 @@ export const useAppStore = defineStore("app", () => {
   const githubUserHint = ref<string>("");
   const commentAuthorName = ref<string>("");
   const darkMode = ref(true);
-  const previewVisible = ref(true);
+  const previewVisible = ref(false);
   const explorerVisible = ref(true);
   const gitPanelVisible = ref(true);
   const busy = ref(false);
@@ -715,6 +888,14 @@ export const useAppStore = defineStore("app", () => {
   const activeAnnotationId = ref<string>();
   const latexIndex = ref<ProjectLatexIndex>(emptyLatexIndex());
   const activeBibPreviewKey = ref<string>();
+  const toolPaths = ref<ToolPathSettings>({});
+  const environmentChecks = ref<EnvironmentToolCheck[]>([]);
+  const layoutSettings = ref<LayoutSettings>(defaultLayoutSettings());
+  const projectSettings = ref<ProjectSettings>(defaultProjectSettings());
+  const exportProfiles = ref<ExportProfile[]>(defaultExportProfiles());
+  const recoveryWarning = ref("");
+  const draftCount = ref(0);
+  let draftSaveTimer: number | undefined;
 
   function currentAnnotationAuthor() {
     return (
@@ -786,14 +967,28 @@ export const useAppStore = defineStore("app", () => {
     formatWritingStats(activeWritingStats.value),
   );
 
-  function applyLayoutForDocumentKind(kind?: DocumentKind) {
+  function applyLayoutForDocumentKind(kind?: DocumentKind, keepExistingTextPreview = false) {
     if (!kind) return;
-    if (["markdown", "latex", "image", "pdf"].includes(kind)) {
+    // 图片和 PDF 只能预览；文本文件第一次打开保持编辑优先。
+    // 如果用户已经在当前工作区手动打开了预览栏，再切换/打开新的 md/tex 时保留预览，
+    // 避免每次打开文件都把右侧预览强制关掉。
+    if (["image", "pdf"].includes(kind)) {
       previewVisible.value = true;
-    } else {
+    } else if (["markdown", "latex"].includes(kind)) {
+      if (!keepExistingTextPreview) previewVisible.value = false;
+    } else if (["bibtex", "text"].includes(kind)) {
       previewVisible.value = false;
     }
   }
+
+  function shouldKeepTextPreviewOnNextWorkspaceOpen() {
+    return !!(
+      previewVisible.value &&
+      activeDocument.value?.source === "workspace" &&
+      workspace.value?.localDir
+    );
+  }
+
 
   const gitDirtyCount = computed(() => gitEntries.value.length);
   const latexBusy = computed(() => !!runningTasks.value["latex-build"]);
@@ -825,6 +1020,66 @@ export const useAppStore = defineStore("app", () => {
   );
   const visibleSourceAnnotations = computed(() => [] as PaperAnnotation[]);
 
+  const researchFlowStatuses = computed<ResearchFlowStepStatus[]>(() => {
+    const nodes = flattenFileNodes(fileTree.value).filter((node) => node.kind === "file");
+    const byPath = new Map(nodes.map((node) => [normalizePath(node.path), node]));
+    const settings = projectSettings.value.researchFlowPaths || {};
+    const latestUnder = (dir?: string, suffix = ".md") => {
+      const prefix = normalizePath(dir || "");
+      return nodes
+        .filter((node) => node.documentKind === "markdown" && (!prefix || normalizePath(node.path).startsWith(`${prefix}/`)) && node.name.endsWith(suffix))
+        .sort((a, b) => normalizePath(b.path).localeCompare(normalizePath(a.path)))[0];
+    };
+    const daily = latestUnder(settings.dailyDir || "notes/daily");
+    const weekly = latestUnder(settings.weeklyDir || "notes/weekly");
+    const evidence = byPath.get(normalizePath(settings.evidenceIndex || "research/evidence-index.md"));
+    const outline = byPath.get(normalizePath(settings.paperOutline || "paper/paper-outline.md"));
+    const review = byPath.get(normalizePath(settings.reviewSummary || ".paper-notes/review-summary.md"));
+    const hasOpenReviews = annotations.value.some((item) => item.status === "open");
+    return [
+      {
+        id: "daily",
+        label: "每日记录",
+        state: daily ? "done" : "ready",
+        path: daily?.path,
+        detail: daily ? `最近：${daily.path}` : "尚未创建今日/最近每日笔记",
+        missing: daily ? [] : ["创建一篇 notes/daily/*.md"],
+      },
+      {
+        id: "weekly",
+        label: "周报",
+        state: weekly ? "done" : daily ? "ready" : "missing",
+        path: weekly?.path,
+        detail: weekly ? `最近：${weekly.path}` : "可从每日记录汇总生成",
+        missing: weekly ? [] : [daily ? "生成 notes/weekly/*.md" : "先创建每日记录"],
+      },
+      {
+        id: "evidence",
+        label: "证据索引",
+        state: evidence ? "done" : (daily || annotations.value.length) ? "ready" : "missing",
+        path: evidence?.path,
+        detail: evidence ? `已建立：${evidence.path}` : "可从笔记、批注、BibTeX、图片提取候选证据",
+        missing: evidence ? [] : ["生成 research/evidence-index.md"],
+      },
+      {
+        id: "outline",
+        label: "论文大纲",
+        state: outline ? "done" : evidence ? "ready" : "missing",
+        path: outline?.path,
+        detail: outline ? `已建立：${outline.path}` : "可从证据索引生成章节骨架",
+        missing: outline ? [] : [evidence ? "生成 paper/paper-outline.md" : "先建立证据索引"],
+      },
+      {
+        id: "review",
+        label: "审阅清单",
+        state: review ? "done" : hasOpenReviews ? "ready" : "missing",
+        path: review?.path,
+        detail: review ? `已建立：${review.path}` : hasOpenReviews ? "有未处理批注，可生成审阅清单" : "暂无批注/审阅条目",
+        missing: review ? [] : [hasOpenReviews ? "生成 .paper-notes/review-summary.md" : "创建批注"],
+      },
+    ];
+  });
+
   async function runExclusive<T>(
     key: string,
     label: string,
@@ -846,18 +1101,30 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  function sanitizeDocumentForPersistence(doc: MarkdownDocument): MarkdownDocument | null {
+    if (doc.source !== "scratch") return null;
+    if (doc.kind === "image" || doc.kind === "pdf") return null;
+    const maxChars = projectSettings.value.privacy?.maxPersistedTextChars || MAX_PERSISTED_DOCUMENT_CHARS;
+    const textLooksLikeInlineAsset = doc.text.startsWith("data:") && doc.text.length > MAX_INLINE_PREVIEW_CHARS;
+    if (textLooksLikeInlineAsset || doc.text.length > maxChars) {
+      return {
+        ...doc,
+        text: `<!-- Scholia Studio 已保护性移除超大草稿内容（${doc.text.length} 字符），避免 appState 卡顿。原工作区文件不会受影响。 -->
+`,
+        dirty: false,
+        lastSavedText: undefined,
+      };
+    }
+    return { ...doc };
+  }
+
   function snapshot(): PersistedAppState {
     // 只持久化轻量状态。工作区文件、图片和 PDF 都能从磁盘重新打开，
     // 不能把它们的全文/base64 data URL 写入 appState，否则 PDF 或图片一旦打开，
     // 之后编辑普通 txt/Markdown 也会因为序列化巨大 JSON 而卡顿。
     const scratchDocuments = documents.value
-      .filter(
-        (doc) =>
-          doc.source === "scratch" &&
-          doc.kind !== "image" &&
-          doc.kind !== "pdf",
-      )
-      .map((doc) => ({ ...doc }));
+      .map(sanitizeDocumentForPersistence)
+      .filter((doc): doc is MarkdownDocument => !!doc);
     const activeId = scratchDocuments.some(
       (doc) => doc.id === activeDocumentId.value,
     )
@@ -880,12 +1147,533 @@ export const useAppStore = defineStore("app", () => {
         pdfPanelVisible: true,
         pdfRenderQuality: pdfRenderQuality.value,
         markdownRenderPreset: markdownRenderPreset.value,
+        toolPaths: toolPaths.value,
+      },
+      layout: layoutSettings.value,
+      projectSettings: projectSettings.value,
+      exportProfiles: exportProfiles.value,
+      recovery: {
+        shutdownClean: false,
+        lastStartedAt: Date.now(),
       },
     };
   }
 
   async function persist() {
     await saveAppState(snapshot());
+  }
+
+  async function persistCleanShutdown() {
+    await saveAppState({
+      ...snapshot(),
+      recovery: {
+        shutdownClean: true,
+        lastStartedAt: Date.now(),
+        lastClosedAt: Date.now(),
+      },
+    });
+  }
+
+  async function setLayoutSettings(next: Partial<LayoutSettings>) {
+    layoutSettings.value = mergeLayoutSettings({ ...layoutSettings.value, ...next });
+    await persist();
+  }
+
+  async function setEditorSidePanelWidth(
+    panel: keyof LayoutSettings["editorSidePanelWidths"],
+    width: number,
+  ) {
+    layoutSettings.value = mergeLayoutSettings({
+      ...layoutSettings.value,
+      editorSidePanelWidths: {
+        ...layoutSettings.value.editorSidePanelWidths,
+        [panel]: Math.round(width),
+      },
+    });
+    await persist();
+  }
+
+  async function setToolPath(id: keyof ToolPathSettings, value: string) {
+    toolPaths.value = { ...toolPaths.value, [id]: value.trim() || undefined };
+    await persist();
+  }
+
+  async function runEnvironmentCheck() {
+    environmentChecks.value = await checkEnvironment(toolPaths.value);
+    const missingRequired = environmentChecks.value.filter((item) => item.required && !item.ok);
+    status.value = missingRequired.length
+      ? `环境检查完成：${missingRequired.length} 个必需依赖缺失。`
+      : "环境检查通过：必需依赖可用。";
+    await persist();
+  }
+
+  async function persistProjectSettings() {
+    if (!workspace.value?.localDir) return;
+    await writeWorkspaceFile(
+      workspace.value.localDir,
+      ".paper-notes/project.json",
+      `${JSON.stringify(projectSettings.value, null, 2)}\n`,
+    );
+    await writeWorkspaceFile(
+      workspace.value.localDir,
+      ".paper-notes/export-profiles.json",
+      `${JSON.stringify(exportProfiles.value, null, 2)}\n`,
+    );
+  }
+
+  async function loadProjectSettings() {
+    if (!workspace.value?.localDir) {
+      projectSettings.value = defaultProjectSettings();
+      exportProfiles.value = defaultExportProfiles();
+      return;
+    }
+    try {
+      const content = await readWorkspaceFile(workspace.value.localDir, ".paper-notes/project.json");
+      {
+        const parsed = JSON.parse(content) as ProjectSettings;
+        const defaults = defaultProjectSettings();
+        projectSettings.value = {
+          ...defaults,
+          ...parsed,
+          privacy: { ...(defaults.privacy || {}), ...(parsed.privacy || {}) },
+          researchFlowPaths: { ...(defaults.researchFlowPaths || {}), ...(parsed.researchFlowPaths || {}) },
+        };
+        if (parsed.toolPaths) toolPaths.value = { ...toolPaths.value, ...parsed.toolPaths };
+        if (parsed.pdfRenderQuality) pdfRenderQuality.value = parsed.pdfRenderQuality;
+      }
+    } catch {
+      projectSettings.value = defaultProjectSettings();
+    }
+    try {
+      const content = await readWorkspaceFile(workspace.value.localDir, ".paper-notes/export-profiles.json");
+      const parsed = JSON.parse(content);
+      exportProfiles.value = Array.isArray(parsed) ? parsed : defaultExportProfiles();
+    } catch {
+      exportProfiles.value = defaultExportProfiles();
+    }
+  }
+
+  async function setProjectSetting<K extends keyof ProjectSettings>(key: K, value: ProjectSettings[K]) {
+    projectSettings.value = { ...projectSettings.value, [key]: value };
+    if (key === "pdfRenderQuality" && typeof value === "number") pdfRenderQuality.value = value;
+    if (key === "authorName" && typeof value === "string") commentAuthorName.value = value;
+    await persistProjectSettings();
+    await persist();
+  }
+
+  async function updateResearchFlowPath(key: keyof NonNullable<ProjectSettings["researchFlowPaths"]>, value: string) {
+    projectSettings.value = {
+      ...projectSettings.value,
+      researchFlowPaths: {
+        ...(projectSettings.value.researchFlowPaths || {}),
+        [key]: value.trim() || undefined,
+      },
+    };
+    await persistProjectSettings();
+    await persist();
+  }
+
+  async function inferProjectSettingsFromWorkspace() {
+    if (!workspace.value?.localDir) return;
+    const files = flattenFileNodes(fileTree.value).filter((node) => node.kind === "file");
+    const hasTex = files.some((node) => node.documentKind === "latex");
+    const hasMarkdown = files.some((node) => node.documentKind === "markdown");
+    const hasBib = files.some((node) => node.documentKind === "bibtex");
+    const hasPdf = files.some((node) => node.documentKind === "pdf");
+    const hasDaily = files.some((node) => normalizePath(node.path).startsWith("notes/daily/"));
+    const next: ProjectSettings = {
+      ...defaultProjectSettings(),
+      ...projectSettings.value,
+      researchFlowPaths: {
+        ...(defaultProjectSettings().researchFlowPaths || {}),
+        ...(projectSettings.value.researchFlowPaths || {}),
+      },
+    };
+    if (!next.mainTexFile && hasTex) {
+      next.mainTexFile = latexIndex.value.rootFile || files.find((node) => /(^|\/)main\.tex$/i.test(node.path))?.path || files.find((node) => node.documentKind === "latex")?.path;
+    }
+    if (!next.mainMarkdownFile && hasMarkdown) {
+      next.mainMarkdownFile = files.find((node) => /(^|\/)(paper|manuscript|README)\.md$/i.test(node.path))?.path || files.find((node) => node.documentKind === "markdown")?.path;
+    }
+    if (workspace.value.localOpenKind === "file") next.projectType = "plain";
+    else if (hasTex && (hasBib || latexIndex.value.citations.length)) next.projectType = hasDaily ? "mixed" : "paper";
+    else if (hasDaily || files.some((node) => normalizePath(node.path).startsWith("notes/"))) next.projectType = "notes";
+    else if (hasPdf && annotations.value.length) next.projectType = "review";
+    else next.projectType = hasMarkdown || hasTex ? "plain" : "review";
+    projectSettings.value = next;
+  }
+
+  async function startGuidedWorkflow(mode: FirstRunMode) {
+    projectSettings.value = { ...projectSettings.value, firstRunMode: mode };
+    if (mode === "review") {
+      await openLocalFile();
+      return;
+    }
+    if (!workspace.value?.localDir) {
+      const doc = defaultDocument();
+      doc.id = makeId("doc");
+      doc.title = mode === "paper" ? "paper-plan.md" : mode === "weekly" ? "weekly-plan.md" : "research-note.md";
+      doc.kind = "markdown";
+      doc.text = mode === "paper"
+        ? "# 论文项目起步\n\n1. 打开或创建本地论文文件夹。\n2. 设置主 TeX / 主 Markdown 文件。\n3. 从每日记录沉淀证据索引。\n"
+        : mode === "weekly"
+          ? "# 周报起步\n\n- 本周完成：\n- 证据沉淀：\n- 风险：\n- 下周计划：\n"
+          : "# 研究记录起步\n\n## 工作记录\n- \n\n## 可能进入论文的结论\n- \n";
+      documents.value = [doc];
+      activeDocumentId.value = doc.id;
+      status.value = "已创建引导草稿；也可以打开示例工作区快速体验完整流程。";
+      await persist();
+      return;
+    }
+    if (mode === "paper") await createPaperOutline();
+    else if (mode === "weekly") await createWeeklyReport();
+    else await createDailyNote();
+  }
+
+  async function openSampleWorkspace() {
+    const dir = await createSampleWorkspace();
+    const cleaned = stripTrailingSeparators(dir);
+    workspace.value = {
+      source: "local",
+      localOpenKind: "folder",
+      owner: commentAuthorName.value.trim(),
+      repo: "sample-workspace",
+      branch: "",
+      localDir: cleaned,
+      rootPath: "",
+    };
+    selectedNodePath.value = undefined;
+    gitEntries.value = [];
+    clearWorkspaceDocumentsForNewRoot();
+    await loadProjectSettings();
+    await loadAnnotations();
+    await refreshWorkspace();
+    const main = projectSettings.value.mainMarkdownFile || projectSettings.value.mainTexFile;
+    const node = main ? findNodeByPath(fileTree.value, main) : findFirstFileNode(fileTree.value);
+    if (node) await openWorkspaceFile(node);
+    status.value = `已打开示例工作区：${cleaned}`;
+    await persistProjectSettings();
+    await persist();
+  }
+
+  function latestResearchNode(id: ResearchFlowStepStatus["id"]): FileNode | undefined {
+    const current = researchFlowStatuses.value.find((item) => item.id === id);
+    return current?.path ? findNodeByPath(fileTree.value, current.path) : undefined;
+  }
+
+  async function openResearchFlowEntry(id: ResearchFlowStepStatus["id"]) {
+    const node = latestResearchNode(id);
+    if (node) {
+      await openWorkspaceFile(node);
+      return;
+    }
+    if (id === "daily") await createDailyNote();
+    else if (id === "weekly") await createWeeklyReport();
+    else if (id === "evidence") await createEvidenceIndex();
+    else if (id === "outline") await createPaperOutline();
+    else await openReviewSummary();
+  }
+
+  function recentResearchContext() {
+    const activePath = activeDocument.value?.relativePath || activeDocument.value?.title || "未打开";
+    const currentAnnotations = annotations.value
+      .filter((item) => item.status === "open" && (item.documentPath === activeDocument.value?.relativePath || item.texAnchor?.file === activeDocument.value?.relativePath))
+      .slice(0, 8)
+      .map((item) => `${item.texAnchor?.file || item.documentPath || "PDF"}${item.texAnchor?.line ? `:${item.texAnchor.line}` : item.pdfAnchor?.page ? ` 第 ${item.pdfAnchor.page} 页` : ""} — ${annotationCommentText(item).split(/\n/)[0] || item.type}`);
+    const recentFigures = flattenFileNodes(fileTree.value)
+      .filter((node) => node.kind === "file" && node.documentKind === "image")
+      .slice(0, 8)
+      .map((node) => node.path);
+    const recentBib = latexIndex.value.citations
+      .slice(0, 8)
+      .map((item) => `${item.key} (${item.file}:${item.line})`);
+    return { activePath, currentAnnotations, recentFigures, recentBib };
+  }
+
+  function extractBulletsByHeading(markdown: string, heading: string) {
+    const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+    const start = lines.findIndex((line) => line.trim().replace(/^#+\s*/, "") === heading);
+    if (start < 0) return [] as string[];
+    const result: string[] = [];
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (/^#{1,3}\s+/.test(line)) break;
+      if (/^\s*[-*+]\s+/.test(line) && !line.includes("[ ]")) result.push(line.replace(/^\s*[-*+]\s+/, "").trim());
+    }
+    return result.filter(Boolean).slice(0, 12);
+  }
+
+  async function readMarkdownCandidates(prefixes: string[]) {
+    if (!workspace.value?.localDir) return [] as Array<{ path: string; text: string }>;
+    const nodes = flattenFileNodes(fileTree.value)
+      .filter((node) => node.kind === "file" && node.documentKind === "markdown" && prefixes.some((prefix) => node.path.startsWith(prefix)))
+      .sort((a, b) => b.path.localeCompare(a.path))
+      .slice(0, 20);
+    const items: Array<{ path: string; text: string }> = [];
+    for (const node of nodes) {
+      try {
+        items.push({ path: node.path, text: await readWorkspaceFile(workspace.value.localDir, makeRelativePath(node.path)) });
+      } catch {}
+    }
+    return items;
+  }
+
+  async function generateWeeklyReportContent(weekLabel: string) {
+    const dailyNotes = await readMarkdownCandidates(["notes/daily/"]);
+    const done = dailyNotes.flatMap((item) => extractBulletsByHeading(item.text, "工作记录").map((line) => `${line}（${item.path}）`));
+    const evidence = dailyNotes.flatMap((item) => extractBulletsByHeading(item.text, "可能进入论文的结论").map((line) => `${line}（${item.path}）`));
+    const risks = dailyNotes.flatMap((item) => extractBulletsByHeading(item.text, "问题与风险").map((line) => `${line}（${item.path}）`));
+    const plans = dailyNotes.flatMap((item) => extractBulletsByHeading(item.text, "明日计划").map((line) => `${line}（${item.path}）`));
+    return `---
+type: weekly-report
+week: ${weekLabel}
+project: ${workspace.value?.repo || ''}
+source_pattern: notes/daily/*.md
+generated_at: ${nowIso()}
+---
+
+# ${weekLabel} 周报
+
+## 本周完成
+
+${yamlList(done)}
+
+## 本周关键证据
+
+| 结论 | 证据来源 | 相关文件 | 可进入论文位置 |
+| --- | --- | --- | --- |
+${evidence.length ? evidence.map((line) => `| ${line} | notes/daily |  |  |`).join("\n") : "|  | notes/daily/ |  |  |"}
+
+## 本周阅读与参考文献
+
+${yamlList(latexIndex.value.citations.slice(0, 10).map((item) => `@${item.key}（${item.file}:${item.line}）`))}
+
+## 论文推进
+
+- 摘要：
+- 引言：
+- 方法：
+- 实验：
+- 结果：
+- 讨论：
+
+## 风险与待验证内容
+
+${yamlList(risks)}
+
+## 下周计划
+
+${yamlList(plans)}
+`;
+  }
+
+  async function generateEvidenceIndexContent() {
+    const notes = await readMarkdownCandidates(["notes/daily/", "notes/weekly/"]);
+    const noteEvidence = notes.flatMap((item) => [
+      ...extractBulletsByHeading(item.text, "可能进入论文的结论"),
+      ...extractBulletsByHeading(item.text, "本周关键证据"),
+    ].map((line) => ({ line, path: item.path }))).slice(0, 40);
+    const openAnnotations = annotations.value.filter((item) => item.status === "open").slice(0, 20);
+    const images = flattenFileNodes(fileTree.value).filter((node) => node.kind === "file" && node.documentKind === "image").slice(0, 20);
+    return `---
+type: evidence-index
+project: ${workspace.value?.repo || ''}
+updated_at: ${nowIso()}
+source_pattern:
+  - notes/daily/*.md
+  - notes/weekly/*.md
+  - .paper-notes/review-items.jsonl
+---
+
+# 论文证据索引
+
+> 目标：让 AI 和人工审阅都能知道每个论文结论来自哪里，而不是凭空生成。
+
+## 结论与证据矩阵
+
+| 论文结论 / Claim | 证据来源 | 文件 / 数据 / 图表 | 支持文献 | 缺失项 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+${noteEvidence.length ? noteEvidence.map((item) => `| ${item.line} | 研究记录 | ${item.path} |  | 需要人工校准 | 待验证 |`).join("\n") : "|  | notes/daily/ |  |  |  | 待验证 |"}
+
+## 图表候选
+
+| 图表 | 来源文件 | 对应章节 | 需要补充 |
+| --- | --- | --- | --- |
+${images.length ? images.map((item) => `| ${item.name} | ${item.path} |  | caption / 引用位置 |`).join("\n") : "|  |  |  |  |"}
+
+## 文献证据
+
+${yamlList(latexIndex.value.citations.slice(0, 30).map((item) => `@${item.key} — ${item.file}:${item.line}`))}
+
+## 批注与审阅证据
+
+${yamlList(openAnnotations.map((item) => `${item.texAnchor?.file || item.documentPath || 'PDF'}${item.texAnchor?.line ? `:${item.texAnchor.line}` : ''} — ${annotationCommentText(item).split(/\n/)[0] || item.type}`))}
+`;
+  }
+
+  async function generatePaperOutlineContent() {
+    let evidence = "";
+    if (workspace.value?.localDir) {
+      try {
+        evidence = await readWorkspaceFile(workspace.value.localDir, "research/evidence-index.md");
+      } catch {}
+    }
+    const claims = evidence
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("|") && !line.includes("---") && !line.includes("论文结论"))
+      .map((line) => line.split("|")[1]?.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    return `---
+type: paper-outline
+project: ${workspace.value?.repo || ''}
+evidence_index: research/evidence-index.md
+generated_at: ${nowIso()}
+---
+
+# 论文大纲
+
+## 题目候选
+
+1. 
+2. 
+3. 
+
+## 核心问题
+
+- 研究问题：
+- 为什么重要：
+- 现有方法不足：
+
+## 贡献点
+
+${yamlList(claims.length ? claims.slice(0, 3) : ["贡献点 1", "贡献点 2", "贡献点 3"])}
+
+## 章节结构
+
+### 1. Introduction
+
+- 背景：
+- 问题：
+- 贡献：
+- 证据来源：research/evidence-index.md
+
+### 2. Related Work
+
+- 主题分组：
+- 当前 BibTeX 条目数：${latexIndex.value.citations.length}
+
+### 3. Method
+
+- 方法概述：
+- 关键公式 / 模块：
+- 图示候选：
+
+### 4. Experiments
+
+- 数据集：
+- Baseline：
+- Ablation：
+- 指标：
+
+### 5. Results and Discussion
+
+- 主要结果：
+- 失败案例：
+- 局限性：
+
+## 待补证据
+
+${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
+`;
+  }
+
+  function scheduleDraftSave(doc: MarkdownDocument) {
+    if (!workspace.value?.localDir || doc.source !== "workspace" || !doc.relativePath || !isTextDocumentKind(doc.kind)) return;
+    window.clearTimeout(draftSaveTimer);
+    const rootDir = workspace.value.localDir;
+    const relativePath = doc.relativePath;
+    const text = doc.text;
+    const kind = doc.kind;
+    draftSaveTimer = window.setTimeout(async () => {
+      try {
+        const key = safeDraftKey(relativePath);
+        const draftPath = `.paper-notes/drafts/${key}.draft`;
+        const manifestPath = `.paper-notes/drafts/${key}.json`;
+        await writeWorkspaceFile(rootDir, draftPath, text);
+        const entry = { relativePath, kind, updatedAt: nowIso(), draftPath };
+        await writeWorkspaceFile(
+          rootDir,
+          manifestPath,
+          `${JSON.stringify(entry, null, 2)}\n`,
+        );
+        let index: Array<typeof entry> = [];
+        try {
+          const indexContent = await readWorkspaceFile(rootDir, ".paper-notes/drafts/index.json");
+          const parsed = JSON.parse(indexContent);
+          index = Array.isArray(parsed) ? parsed : [];
+        } catch {}
+        index = [entry, ...index.filter((item) => item.relativePath !== relativePath)].slice(0, 80);
+        await writeWorkspaceFile(rootDir, ".paper-notes/drafts/index.json", `${JSON.stringify(index, null, 2)}\n`);
+      } catch {
+        // 草稿保存不能打断编辑。
+      }
+    }, 900);
+  }
+
+  async function removeDraftForDocument(doc: MarkdownDocument) {
+    if (!workspace.value?.localDir || !doc.relativePath) return;
+    // 当前后端删除会移动到 .paper-notes/trash；草稿清理失败不影响保存主文件。
+    const key = safeDraftKey(doc.relativePath);
+    try { await deleteWorkspaceItem(workspace.value.localDir, `.paper-notes/drafts/${key}.draft`); } catch {}
+    try { await deleteWorkspaceItem(workspace.value.localDir, `.paper-notes/drafts/${key}.json`); } catch {}
+  }
+
+  async function detectRecoverableDrafts(wasCleanShutdown: boolean) {
+    draftCount.value = 0;
+    recoveryWarning.value = "";
+    if (!workspace.value?.localDir || wasCleanShutdown) return;
+    let index: Array<{ relativePath: string; draftPath: string; updatedAt?: string }> = [];
+    try {
+      const content = await readWorkspaceFile(workspace.value.localDir, ".paper-notes/drafts/index.json");
+      const parsed = JSON.parse(content);
+      index = Array.isArray(parsed) ? parsed : [];
+    } catch {}
+    draftCount.value = index.length;
+    if (index.length) {
+      recoveryWarning.value = `检测到上次可能未正常关闭，并发现 ${index.length} 个自动保存草稿；请在 .paper-notes/drafts/index.json 中核对恢复。`;
+      status.value = recoveryWarning.value;
+    } else {
+      recoveryWarning.value = "检测到上次可能未正常关闭，但没有发现可恢复草稿。";
+    }
+  }
+
+  async function exportDebugBundle() {
+    if (!workspace.value?.localDir) throw new Error("请先打开一个本地文件夹或 GitHub 工作区。");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const base = `.paper-notes/debug-export/${timestamp}`;
+    const checks = environmentChecks.value.length
+      ? environmentChecks.value
+      : await checkEnvironment(toolPaths.value);
+    await writeWorkspaceFile(workspace.value.localDir, `${base}/app-state.json`, `${JSON.stringify(snapshot(), null, 2)}\n`);
+    await writeWorkspaceFile(workspace.value.localDir, `${base}/environment-check.json`, `${JSON.stringify(checks, null, 2)}\n`);
+    await writeWorkspaceFile(workspace.value.localDir, `${base}/build-log.txt`, latexResult.value?.log || "尚无构建日志。\n");
+    await writeWorkspaceFile(
+      workspace.value.localDir,
+      `${base}/system-info.md`,
+      [
+        "# Scholia Studio Debug Export",
+        "",
+        `- Time: ${nowIso()}`,
+        `- Workspace: ${workspace.value.localDir}`,
+        `- Active file: ${activeDocument.value?.relativePath || activeDocument.value?.title || "none"}`,
+        `- Status: ${status.value}`,
+        `- Error: ${error.value || "none"}`,
+        "",
+      ].join("\n"),
+    );
+    status.value = `已导出诊断包：${base}`;
+    await refreshWorkspace();
   }
 
   async function loadAnnotations() {
@@ -941,9 +1729,12 @@ export const useAppStore = defineStore("app", () => {
           doc.kind !== "image" &&
           doc.kind !== "pdf",
       );
+      const savedHadDocumentList = Array.isArray(saved.documents);
       documents.value = lightweightDocuments.length
         ? lightweightDocuments
-        : [defaultDocument()];
+        : savedHadDocumentList
+          ? []
+          : [defaultDocument()];
       activeDocumentId.value = documents.value.some(
         (doc) => doc.id === initial.activeDocumentId,
       )
@@ -951,6 +1742,20 @@ export const useAppStore = defineStore("app", () => {
         : documents.value[0]?.id;
       fileTree.value = [];
       workspace.value = initial.workspace;
+      toolPaths.value = initial.editor?.toolPaths || {};
+      layoutSettings.value = mergeLayoutSettings(initial.layout);
+      {
+        const defaults = defaultProjectSettings();
+        const savedProject = initial.projectSettings || {};
+        projectSettings.value = {
+          ...defaults,
+          ...savedProject,
+          privacy: { ...(defaults.privacy || {}), ...(savedProject.privacy || {}) },
+          researchFlowPaths: { ...(defaults.researchFlowPaths || {}), ...(savedProject.researchFlowPaths || {}) },
+        };
+      }
+      exportProfiles.value = initial.exportProfiles?.length ? initial.exportProfiles : defaultExportProfiles();
+      const wasCleanShutdown = initial.recovery?.shutdownClean ?? true;
       commentAuthorName.value =
         initial.commentAuthorName || initial.workspace?.owner || "";
       if (!commentAuthorName.value.trim()) {
@@ -962,7 +1767,7 @@ export const useAppStore = defineStore("app", () => {
       }
       gitEntries.value = [];
       darkMode.value = initial.editor?.darkMode ?? true;
-      previewVisible.value = initial.editor?.previewVisible ?? true;
+      previewVisible.value = initial.editor?.previewVisible ?? false;
       explorerVisible.value = initial.editor?.explorerVisible ?? true;
       gitPanelVisible.value = initial.editor?.gitPanelVisible ?? true;
       pdfRenderQuality.value = Math.min(
@@ -978,7 +1783,10 @@ export const useAppStore = defineStore("app", () => {
       if (workspace.value?.localDir) {
         await loadAnnotations();
         await refreshWorkspace();
+        await loadProjectSettings();
+        await detectRecoverableDrafts(wasCleanShutdown);
       }
+      await persist();
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
       const fallback = emptyState();
@@ -1027,6 +1835,8 @@ export const useAppStore = defineStore("app", () => {
         status.value = output.trim() || "Git 仓库已准备好，左侧目录树已刷新。";
         await loadAnnotations();
         await refreshWorkspace();
+        await loadProjectSettings();
+        await persistProjectSettings();
         await persist();
       } catch (err) {
         error.value = err instanceof Error ? err.message : String(err);
@@ -1076,7 +1886,10 @@ export const useAppStore = defineStore("app", () => {
       clearWorkspaceDocumentsForNewRoot();
       await loadAnnotations();
       await refreshWorkspace();
-      const first = findFirstFileNode(fileTree.value);
+      await loadProjectSettings();
+      await persistProjectSettings();
+      const preferredPath = projectSettings.value.mainMarkdownFile || projectSettings.value.mainTexFile;
+      const first = preferredPath ? findNodeByPath(fileTree.value, preferredPath) || findFirstFileNode(fileTree.value) : findFirstFileNode(fileTree.value);
       if (first) {
         await openWorkspaceFile(first);
       } else {
@@ -1113,6 +1926,8 @@ export const useAppStore = defineStore("app", () => {
       gitEntries.value = [];
       clearWorkspaceDocumentsForNewRoot();
       await loadAnnotations();
+      await loadProjectSettings();
+      await persistProjectSettings();
       fileTree.value = [singleFileNodeFromName(name)];
       selectedNodePath.value = name;
       await openWorkspaceFile(singleFileNodeFromName(name));
@@ -1146,6 +1961,8 @@ export const useAppStore = defineStore("app", () => {
         selectedNodePath.value = undefined;
       await refreshGitStatus();
       await refreshLatexIndex();
+      await inferProjectSettingsFromWorkspace();
+      await persistProjectSettings();
       await persist();
     });
   }
@@ -1194,12 +2011,58 @@ export const useAppStore = defineStore("app", () => {
     if (displayPath && findNodeByPath(fileTree.value, displayPath)) {
       selectedNodePath.value = displayPath;
     }
-    applyLayoutForDocumentKind(activeDocument.value?.kind);
     persist().catch(() => undefined);
   }
 
   function setEditorCursorLine(line?: number | null) {
     editorCursorLine.value = line || null;
+  }
+
+  function updateAnchorsForDocument(doc: MarkdownDocument): boolean {
+    if (!doc.relativePath || !["latex", "markdown"].includes(doc.kind)) return false;
+    const lines = doc.text.replace(/\r\n/g, "\n").split("\n");
+    let changed = false;
+    for (const item of annotations.value) {
+      const anchor = item.texAnchor;
+      if (!anchor || normalizePath(anchor.file) !== normalizePath(doc.relativePath)) continue;
+      const quote = (anchor.sourceText || item.sourceText || "").trim();
+      if (!quote) continue;
+      const start = Math.max(1, anchor.line || 1);
+      const end = Math.max(start, anchor.lineEnd || start);
+      const current = lines.slice(start - 1, end).join("\n").trim();
+      if (current.includes(quote) || quote.includes(current)) {
+        if (item.anchorConfidence !== "stable" || item.needsReview) {
+          item.anchorConfidence = "stable";
+          item.needsReview = false;
+          item.needsReviewReason = undefined;
+          item.updatedAt = nowIso();
+          changed = true;
+        }
+        continue;
+      }
+      const full = doc.text;
+      const index = full.indexOf(quote);
+      if (index >= 0) {
+        const nextLine = lineNumberAtOffset(full, index);
+        const nextEnd = lineNumberAtOffset(full, index + quote.length);
+        if (anchor.line !== nextLine || anchor.lineEnd !== nextEnd || item.anchorConfidence !== "stable") {
+          anchor.line = nextLine;
+          anchor.lineEnd = nextEnd;
+          item.anchorConfidence = "stable";
+          item.needsReview = false;
+          item.needsReviewReason = undefined;
+          item.updatedAt = nowIso();
+          changed = true;
+        }
+      } else if (item.anchorConfidence !== "unstable" || !item.needsReview) {
+        item.anchorConfidence = "unstable";
+        item.needsReview = true;
+        item.needsReviewReason = "源码已变更，原始选中文本无法在当前文件中自动匹配；需要人工校准锚点。";
+        item.updatedAt = nowIso();
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   function updateActiveText(text: string) {
@@ -1210,6 +2073,19 @@ export const useAppStore = defineStore("app", () => {
     // 不再每个按键对全文做 hash。大文件中 hash 是明显的 O(n) 主线程开销。
     // 简化为“编辑后置脏”，保存时再清除。
     if (!doc.dirty) doc.dirty = true;
+    scheduleDraftSave(doc);
+  }
+
+  function updateDocumentText(id: string, text: string) {
+    const doc = documents.value.find((item) => item.id === id);
+    if (!doc || doc.text === text) return;
+    doc.text = text;
+    doc.updatedAt = Date.now();
+    if (!doc.dirty) doc.dirty = true;
+    scheduleDraftSave(doc);
+    if (["latex", "markdown", "bibtex"].includes(doc.kind)) {
+      void refreshLatexIndex();
+    }
   }
 
   function makeRelativePath(path: string): string {
@@ -1287,6 +2163,7 @@ export const useAppStore = defineStore("app", () => {
     status.value = `正在打开：${node.path}`;
 
     try {
+      const keepTextPreview = shouldKeepTextPreviewOnNextWorkspaceOpen();
       const relativePath = makeRelativePath(node.path);
       const absolutePath = `${workspace.value.localDir.replace(/[\\/]$/, "")}/${relativePath}`;
 
@@ -1306,7 +2183,7 @@ export const useAppStore = defineStore("app", () => {
           existing.kind = "pdf";
           existing.absolutePath = absolutePath;
           activeDocumentId.value = existing.id;
-          applyLayoutForDocumentKind(existing.kind);
+          applyLayoutForDocumentKind(existing.kind, keepTextPreview);
         } else {
           const doc: MarkdownDocument = {
             id: makeId("file"),
@@ -1322,7 +2199,7 @@ export const useAppStore = defineStore("app", () => {
           };
           documents.value.unshift(doc);
           activeDocumentId.value = doc.id;
-          applyLayoutForDocumentKind(doc.kind);
+          applyLayoutForDocumentKind(doc.kind, keepTextPreview);
         }
         if (!isLatestOpenRequest(requestId)) return;
         pdfPreviewUrl.value = text;
@@ -1355,7 +2232,7 @@ export const useAppStore = defineStore("app", () => {
         existing.kind = node.documentKind;
         existing.absolutePath = absolutePath;
         activeDocumentId.value = existing.id;
-        applyLayoutForDocumentKind(existing.kind);
+        applyLayoutForDocumentKind(existing.kind, keepTextPreview);
       } else {
         const doc: MarkdownDocument = {
           id: makeId("file"),
@@ -1371,7 +2248,7 @@ export const useAppStore = defineStore("app", () => {
         };
         documents.value.unshift(doc);
         activeDocumentId.value = doc.id;
-        applyLayoutForDocumentKind(doc.kind);
+        applyLayoutForDocumentKind(doc.kind, keepTextPreview);
       }
 
       latexResult.value = null;
@@ -1427,15 +2304,18 @@ export const useAppStore = defineStore("app", () => {
       doc.source = "workspace";
       doc.kind = kindFromPath(doc.relativePath);
     }
+    const anchorsChanged = updateAnchorsForDocument(doc);
     await writeWorkspaceFile(
       workspace.value.localDir,
       doc.relativePath,
       doc.text,
     );
+    if (anchorsChanged) await saveAnnotations();
     doc.lastSavedText = doc.text;
     doc.dirty = false;
     doc.updatedAt = Date.now();
     status.value = `已保存本地：${doc.relativePath}`;
+    await removeDraftForDocument(doc);
     await refreshWorkspace();
     const savedDisplayPath = displayPathFromRelative(doc.relativePath);
     if (savedDisplayPath && findNodeByPath(fileTree.value, savedDisplayPath)) {
@@ -1702,9 +2582,11 @@ export const useAppStore = defineStore("app", () => {
         const buildForDocumentId = doc.id;
         status.value =
           "LaTeX 正在后台构建 PDF，设置/隐藏/切换文件等界面操作不会被锁住…";
+        const targetPath = projectSettings.value.mainTexFile || doc.relativePath;
         const result = await buildLatexFile(
           workspace.value.localDir,
-          doc.relativePath,
+          targetPath,
+          toolPaths.value,
         );
         if (activeDocumentId.value !== buildForDocumentId) {
           latexResult.value = result;
@@ -1741,9 +2623,11 @@ export const useAppStore = defineStore("app", () => {
       try {
         const buildForDocumentId = doc.id;
         status.value = "Pandoc 正在后台将 Markdown 构建为 PDF…";
+        const targetPath = projectSettings.value.mainMarkdownFile || doc.relativePath;
         const result = await buildMarkdownPandocFile(
           workspace.value.localDir,
-          doc.relativePath,
+          targetPath,
+          toolPaths.value,
         );
         if (activeDocumentId.value !== buildForDocumentId) {
           latexResult.value = result;
@@ -1902,6 +2786,7 @@ export const useAppStore = defineStore("app", () => {
       doc.relativePath,
       line,
       column,
+      toolPaths.value,
     );
     const nextPoint: PdfSyncPoint = { ...point, source: "synctex" };
     if (nextPoint.pdfPath && nextPoint.pdfPath !== pdfPreviewPath.value) {
@@ -1920,6 +2805,7 @@ export const useAppStore = defineStore("app", () => {
       page,
       x,
       y,
+      toolPaths.value,
     );
     const relativePath =
       source.relativePath || relativeFromAbsolute(source.input);
@@ -1990,6 +2876,7 @@ export const useAppStore = defineStore("app", () => {
         payload.page,
         payload.x,
         payload.y,
+        toolPaths.value,
       );
       const relativePath =
         source.relativePath || relativeFromAbsolute(source.input);
@@ -2204,13 +3091,29 @@ export const useAppStore = defineStore("app", () => {
   async function updateAnnotationStatus(payload: {
     id: string;
     status: PaperAnnotationStatus;
+    resolutionNote?: string;
   }) {
     const item = annotations.value.find(
       (annotation) => annotation.id === payload.id,
     );
     if (!item) return;
+    const previousStatus = item.status;
     item.status = payload.status;
     item.updatedAt = nowIso();
+    if (payload.status === "resolved" && previousStatus !== "resolved") {
+      const note = payload.resolutionNote ?? window.prompt("记录这条批注的解决说明（可留空）：", item.resolutionNote || "") ?? "";
+      item.resolvedAt = nowIso();
+      item.resolvedBy = currentAnnotationAuthor();
+      item.resolutionNote = note.trim() || "已解决，未填写说明。";
+      item.resolvedRevision = gitEntries.value.length ? `dirty:${gitEntries.value.length}` : "clean-or-no-git";
+      item.needsReview = false;
+    }
+    if (payload.status !== "resolved") {
+      item.resolvedAt = undefined;
+      item.resolvedBy = undefined;
+      item.resolvedRevision = undefined;
+      item.resolutionNote = undefined;
+    }
     item.messages = threadMessages(item);
     item.body = item.messages[0]?.body || item.body || "";
     activeAnnotationId.value = item.id;
@@ -2265,7 +3168,7 @@ export const useAppStore = defineStore("app", () => {
     status.value = "已更新评论。";
   }
 
-  async function exportAnnotationsMarkdown() {
+  async function exportAnnotations(format: AnnotationExportFormat = "markdown") {
     if (!workspace.value?.localDir)
       throw new Error("请先获取/打开一个本地工作区。");
     const doc = activeDocument.value;
@@ -2282,10 +3185,17 @@ export const useAppStore = defineStore("app", () => {
         .replace(/[<>:"/\\|?*]+/g, "-")
         .replace(/^-+|-+$/g, "") || "annotations";
     const title = `${doc?.relativePath || doc?.title || "当前文件"} 批注`;
+    const formatConfig: Record<AnnotationExportFormat, { ext: string; text: string }> = {
+      markdown: { ext: "md", text: serializeAnnotationExportMarkdown(currentItems, title) },
+      jsonl: { ext: "jsonl", text: serializeAnnotationsJsonl(currentItems) },
+      csv: { ext: "csv", text: serializeAnnotationsCsv(currentItems) },
+      "latex-todonotes": { ext: "tex", text: serializeAnnotationsLatexTodos(currentItems) },
+    };
+    const selected = formatConfig[format];
     const savedPath = await saveTextFileWithDialog({
       defaultDir: `${workspace.value.localDir.replace(/[\/]$/, "")}/.paper-notes`,
-      defaultFilename: `${baseName}-批注.md`,
-      text: serializeAnnotationExportMarkdown(currentItems, title),
+      defaultFilename: `${baseName}-批注.${selected.ext}`,
+      text: selected.text,
     });
     if (!savedPath) {
       status.value = "已取消导出。";
@@ -2293,6 +3203,46 @@ export const useAppStore = defineStore("app", () => {
     }
     status.value = `已导出当前文件批注：${savedPath}`;
     await refreshGitStatus();
+  }
+
+  async function exportAnnotationsMarkdown() {
+    await exportAnnotations("markdown");
+  }
+
+  async function convertAnnotationToTask(id: string) {
+    if (!workspace.value?.localDir) throw new Error("请先打开本地工作区。");
+    const item = annotations.value.find((annotation) => annotation.id === id);
+    if (!item) return;
+    const file = item.texAnchor?.file || item.markdownAnchor?.file || item.documentPath;
+    if (!file) throw new Error("这条批注没有源码文件锚点，无法转为源码任务。");
+    const line = Math.max(1, item.texAnchor?.line || 1);
+    const text = await readWorkspaceFile(workspace.value.localDir, file);
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    const comment = annotationCommentText(item).split("\n")[0]?.slice(0, 160) || item.type;
+    const marker = kindFromPath(file) === "latex"
+      ? `% TODO[${item.id}]: ${comment}`
+      : `<!-- TODO[${item.id}]: ${comment} -->`;
+    const insertionIndex = Math.min(lines.length, Math.max(0, line - 1));
+    if (!lines.some((value) => value.includes(`TODO[${item.id}]`))) {
+      lines.splice(insertionIndex, 0, marker);
+      const nextText = lines.join("\n");
+      await writeWorkspaceFile(workspace.value.localDir, file, nextText);
+      const openDoc = documents.value.find((doc) => doc.relativePath === file);
+      if (openDoc) {
+        openDoc.text = nextText;
+        openDoc.lastSavedText = nextText;
+        openDoc.dirty = false;
+        openDoc.updatedAt = Date.now();
+      }
+    }
+    item.type = "todo";
+    item.status = "open";
+    item.taskMarker = { file, line, marker };
+    item.updatedAt = nowIso();
+    activeAnnotationId.value = item.id;
+    await saveAnnotations();
+    await refreshWorkspace();
+    status.value = `已将批注转为源码任务：${file}:${line}`;
   }
 
   async function removeAnnotation(id: string) {
@@ -2374,6 +3324,81 @@ export const useAppStore = defineStore("app", () => {
     activeBibPreviewKey.value = key || undefined;
   }
 
+  function defaultBibFile(): string {
+    return latexIndex.value.bibFiles[0]?.path || "paper/refs.bib";
+  }
+
+  function escapeBibValue(value?: string) {
+    return (value || "")
+      .replace(/\r?\n/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/[{}]/g, "")
+      .trim();
+  }
+
+  function makeBibEntryRaw(payload: BibEntryPayload) {
+    const type = escapeBibValue(payload.type).toLowerCase() || "misc";
+    const key = escapeBibValue(payload.key).replace(/\s+/g, "-") || `ref${new Date().getFullYear()}`;
+    const fields: Array<[string, string | undefined]> = [
+      ["title", payload.title || "Untitled Reference"],
+      ["author", payload.author || (type === "misc" ? undefined : "Unknown")],
+      ["year", payload.year || String(new Date().getFullYear())],
+      ["journal", type === "article" ? (payload.journal || "Unknown Journal") : payload.journal],
+      ["booktitle", type === "inproceedings" ? (payload.booktitle || "Unknown Proceedings") : payload.booktitle],
+      ["publisher", type === "book" ? (payload.publisher || "Unknown Publisher") : payload.publisher],
+      ["doi", payload.doi],
+      ["url", payload.url],
+      ["note", payload.note],
+    ];
+    const body = fields
+      .map(([name, value]) => [name, escapeBibValue(value)] as const)
+      .filter(([, value]) => value)
+      .map(([name, value]) => `  ${name} = {${value}}`)
+      .join(",\n");
+    return `@${type}{${key},\n${body}\n}\n`;
+  }
+
+  async function createBibEntry(payload: BibEntryPayload) {
+    if (!workspace.value?.localDir) throw new Error("请先打开本地工作区。");
+    const file = defaultBibFile();
+    const key = escapeBibValue(payload.key).replace(/\s+/g, "-");
+    if (!key) throw new Error("BibTeX key 不能为空。");
+    let current = "";
+    try { current = await readWorkspaceFile(workspace.value.localDir, makeRelativePath(file)); } catch {}
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const keyPattern = new RegExp(`@\\w+\\s*\\{\\s*${escapedKey}\\s*,`, "i");
+    if (keyPattern.test(current)) throw new Error(`BibTeX key 已存在：${key}`);
+    const raw = makeBibEntryRaw({ ...payload, key });
+    await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(file), current.replace(/\s*$/, "\n") + raw);
+    await refreshWorkspace();
+    await refreshLatexIndex();
+    status.value = `已新增 BibTeX 条目：${key}`;
+  }
+
+  async function updateBibEntryRaw(key: string, payload?: BibEntryPayload) {
+    if (!workspace.value?.localDir) throw new Error("请先打开本地工作区。");
+    const entry = latexIndex.value.citations.find((item) => item.key === key);
+    if (!entry?.file || !entry.raw) throw new Error(`未找到 BibTeX 条目：${key}`);
+    const nextRaw = payload ? makeBibEntryRaw(payload).trim() : window.prompt("编辑 BibTeX 原文", entry.raw)?.trim();
+    if (!nextRaw) return;
+    const text = await readWorkspaceFile(workspace.value.localDir, makeRelativePath(entry.file));
+    if (!text.includes(entry.raw)) throw new Error("BibTeX 文件已变化，无法安全替换；请刷新后重试。");
+    await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(entry.file), text.replace(entry.raw, nextRaw));
+    await refreshLatexIndex();
+    status.value = `已更新 BibTeX 条目：${payload?.key || key}`;
+  }
+
+  async function removeBibEntry(key: string) {
+    if (!workspace.value?.localDir) throw new Error("请先打开本地工作区。");
+    const entry = latexIndex.value.citations.find((item) => item.key === key);
+    if (!entry?.file || !entry.raw) throw new Error(`未找到 BibTeX 条目：${key}`);
+    if (!window.confirm(`确定删除 BibTeX 条目 ${key} 吗？`)) return;
+    const text = await readWorkspaceFile(workspace.value.localDir, makeRelativePath(entry.file));
+    await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(entry.file), text.replace(entry.raw, "").replace(/\n{3,}/g, "\n\n"));
+    await refreshLatexIndex();
+    status.value = `已删除 BibTeX 条目：${key}`;
+  }
+
   async function openLatexOutlineItem(item: LatexOutlineItem) {
     await openWorkspacePathAtLine(makeRelativePath(item.file), item.line);
     if (activeDocument.value?.kind === "latex") {
@@ -2414,7 +3439,7 @@ export const useAppStore = defineStore("app", () => {
       status.value = `未找到 BibTeX 条目：${key}`;
       return;
     }
-    activeBibPreviewKey.value = key;
+    activeBibPreviewKey.value = undefined;
     await openWorkspacePathAtLine(makeRelativePath(entry.file), entry.line);
   }
 
@@ -2426,7 +3451,10 @@ export const useAppStore = defineStore("app", () => {
     }
     const result = await runExclusive('pandoc-export', 'Pandoc 导出', async () => {
       status.value = `正在导出 ${format.toUpperCase()}…`;
-      return exportMarkdownPandocFile(workspace.value!.localDir, doc.relativePath!, format);
+      const targetPath = projectSettings.value.mainMarkdownFile || doc.relativePath!;
+      projectSettings.value = { ...projectSettings.value, exportProfile: format, pandocProfileId: format };
+      await persistProjectSettings();
+      return exportMarkdownPandocFile(workspace.value!.localDir, targetPath, format, toolPaths.value);
     });
     if (!result) return;
     latexResult.value = result;
@@ -2464,6 +3492,8 @@ export const useAppStore = defineStore("app", () => {
     clearWorkspaceDocumentsForNewRoot();
     await loadAnnotations();
     await refreshWorkspace();
+    await loadProjectSettings();
+    await persistProjectSettings();
     await persist();
     return true;
   }
@@ -2481,14 +3511,29 @@ export const useAppStore = defineStore("app", () => {
       if (!rawFolder) return false;
       const baseFolder = normalizePath(rawFolder).replace(/^\/+|\/+$/g, '');
       if (!baseFolder) return false;
-      const existing = findNodeByPath(fileTree.value, baseFolder);
-      if (existing) {
-        const ok = window.confirm(`目录 ${baseFolder} 已存在，继续写入可能覆盖同名文件，是否继续？`);
+      const targetPaths = template.files.map((file) => `${baseFolder}/${normalizePath(file.path)}`);
+      const conflicts = targetPaths.filter((path) => findNodeByPath(fileTree.value, path));
+      if (conflicts.length) {
+        const ok = window.confirm(
+          `模板目标中有 ${conflicts.length} 个同名文件。继续写入前会自动备份到 .paper-notes/backups/template-overwrites，是否继续？\n\n${conflicts.slice(0, 8).join("\n")}`,
+        );
         if (!ok) return false;
       }
+      const backupStamp = new Date().toISOString().replace(/[:.]/g, '-');
       for (const file of template.files) {
         const displayPath = `${baseFolder}/${normalizePath(file.path)}`;
-        await writeWorkspaceFile(workspace.value.localDir, makeRelativePath(displayPath), file.content);
+        const relativePath = makeRelativePath(displayPath);
+        if (conflicts.includes(displayPath)) {
+          try {
+            const oldContent = await readWorkspaceFile(workspace.value.localDir, relativePath);
+            await writeWorkspaceFile(
+              workspace.value.localDir,
+              `.paper-notes/backups/template-overwrites/${backupStamp}/${displayPath}`,
+              oldContent,
+            );
+          } catch {}
+        }
+        await writeWorkspaceFile(workspace.value.localDir, relativePath, file.content);
       }
       status.value = `已从模板创建项目：${template.name}`;
       await refreshWorkspace();
@@ -2533,7 +3578,9 @@ export const useAppStore = defineStore("app", () => {
   async function createDailyNote() {
     const now = new Date();
     const dateLabel = formatLocalDate(now);
-    const displayPath = `notes/daily/${dateLabel}.md`;
+    const dailyDir = normalizePath(projectSettings.value.researchFlowPaths?.dailyDir || 'notes/daily');
+    const displayPath = `${dailyDir}/${dateLabel}.md`;
+    const context = recentResearchContext();
     await openOrCreateWorkspaceMarkdown(
       displayPath,
       () => `---
@@ -2542,7 +3589,7 @@ date: ${dateLabel}
 project: ${workspace.value?.repo || ''}
 tags: [research-log]
 related_files:
-  - ${activeDocument.value?.relativePath || ''}
+  - ${context.activePath}
 claims: []
 evidence: []
 ---
@@ -2555,18 +3602,22 @@ evidence: []
 
 ## 工作记录
 
-- 当前文件：${activeDocument.value?.relativePath || activeDocument.value?.title || '未打开'}
+- 当前文件：${context.activePath}
 - 
+
+## 当前批注
+
+${yamlList(context.currentAnnotations)}
 
 ## 实验 / 数据 / 图表
 
 | 项目 | 文件或路径 | 结论 | 是否可写入论文 |
 | --- | --- | --- | --- |
-|  |  |  |  |
+${context.recentFigures.length ? context.recentFigures.map((path) => `|  | ${path} |  | 待判断 |`).join("\n") : "|  |  |  |  |"}
 
 ## 阅读文献
 
-- 
+${yamlList(context.recentBib)}
 
 ## 可能进入论文的结论
 
@@ -2589,167 +3640,57 @@ evidence: []
   async function createWeeklyReport() {
     const now = new Date();
     const weekLabel = isoWeekLabel(now);
-    const displayPath = `notes/weekly/${weekLabel}.md`;
+    const weeklyDir = normalizePath(projectSettings.value.researchFlowPaths?.weeklyDir || 'notes/weekly');
+    const displayPath = `${weeklyDir}/${weekLabel}.md`;
     await openOrCreateWorkspaceMarkdown(
       displayPath,
-      () => `---
-type: weekly-report
-week: ${weekLabel}
-project: ${workspace.value?.repo || ''}
-source_pattern: notes/daily/*.md
----
-
-# ${weekLabel} 周报
-
-## 本周完成
-
-- 
-
-## 本周关键证据
-
-| 结论 | 证据来源 | 相关文件 | 可进入论文位置 |
-| --- | --- | --- | --- |
-|  |  |  |  |
-
-## 本周阅读与参考文献
-
-- 
-
-## 论文推进
-
-- 摘要：
-- 引言：
-- 方法：
-- 实验：
-- 结果：
-- 讨论：
-
-## 风险与待验证内容
-
-- 
-
-## 下周计划
-
-- [ ] 
-`,
+      () => '',
       { created: '已创建周报', opened: '已打开周报' },
     );
+    const doc = activeDocument.value;
+    if (doc?.relativePath === makeRelativePath(displayPath) && !doc.dirty) {
+      doc.text = await generateWeeklyReportContent(weekLabel);
+      doc.lastSavedText = '';
+      doc.dirty = true;
+      scheduleDraftSave(doc);
+    }
   }
 
   async function createEvidenceIndex() {
-    const displayPath = 'research/evidence-index.md';
+    const displayPath = projectSettings.value.researchFlowPaths?.evidenceIndex || 'research/evidence-index.md';
     await openOrCreateWorkspaceMarkdown(
       displayPath,
-      () => `---
-type: evidence-index
-project: ${workspace.value?.repo || ''}
-updated_at: ${nowIso()}
----
-
-# 论文证据索引
-
-> 目标：让 AI 和人工审阅都能知道每个论文结论来自哪里，而不是凭空生成。
-
-## 结论与证据矩阵
-
-| 论文结论 / Claim | 证据来源 | 文件 / 数据 / 图表 | 支持文献 | 缺失项 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-|  | notes/daily/ |  |  |  | 待验证 |
-
-## 图表候选
-
-| 图表 | 来源文件 | 对应章节 | 需要补充 |
-| --- | --- | --- | --- |
-|  |  |  |  |
-
-## 文献证据
-
-- 当前 BibTeX 条目数：${latexIndex.value.citations.length}
-- 需要补充的引用：
-
-## 批注与审阅证据
-
-- 当前未处理批注：${annotations.value.filter((item) => item.status === 'open').length}
-- 批注任务文件：.paper-notes/review-items.jsonl
-`,
+      () => '',
       { created: '已创建证据索引', opened: '已打开证据索引' },
     );
+    const doc = activeDocument.value;
+    if (doc?.relativePath === makeRelativePath(displayPath) && !doc.dirty) {
+      doc.text = await generateEvidenceIndexContent();
+      doc.lastSavedText = '';
+      doc.dirty = true;
+      scheduleDraftSave(doc);
+    }
   }
 
   async function createPaperOutline() {
-    const displayPath = 'paper/paper-outline.md';
+    const displayPath = projectSettings.value.researchFlowPaths?.paperOutline || 'paper/paper-outline.md';
     await openOrCreateWorkspaceMarkdown(
       displayPath,
-      () => `---
-type: paper-outline
-project: ${workspace.value?.repo || ''}
-evidence_index: research/evidence-index.md
----
-
-# 论文大纲
-
-## 题目候选
-
-1. 
-2. 
-3. 
-
-## 核心问题
-
-- 研究问题：
-- 为什么重要：
-- 现有方法不足：
-
-## 贡献点
-
-1. 
-2. 
-3. 
-
-## 章节结构
-
-### 1. Introduction
-
-- 背景：
-- 问题：
-- 贡献：
-- 证据来源：
-
-### 2. Related Work
-
-- 主题分组：
-- 当前 BibTeX 条目数：${latexIndex.value.citations.length}
-
-### 3. Method
-
-- 方法概述：
-- 关键公式 / 模块：
-- 图示候选：
-
-### 4. Experiments
-
-- 数据集：
-- Baseline：
-- Ablation：
-- 指标：
-
-### 5. Results and Discussion
-
-- 主要结果：
-- 失败案例：
-- 局限性：
-
-## 待补证据
-
-- [ ] 
-`,
+      () => '',
       { created: '已创建论文大纲', opened: '已打开论文大纲' },
     );
+    const doc = activeDocument.value;
+    if (doc?.relativePath === makeRelativePath(displayPath) && !doc.dirty) {
+      doc.text = await generatePaperOutlineContent();
+      doc.lastSavedText = '';
+      doc.dirty = true;
+      scheduleDraftSave(doc);
+    }
   }
 
   async function openReviewSummary() {
     if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
-    const displayPath = '.paper-notes/review-summary.md';
+    const displayPath = projectSettings.value.researchFlowPaths?.reviewSummary || '.paper-notes/review-summary.md';
     await writeWorkspaceFile(workspace.value.localDir, displayPath, serializeReviewSummary(annotations.value));
     await refreshWorkspace();
     const node = findNodeByPath(fileTree.value, displayPath) || {
@@ -2767,6 +3708,38 @@ evidence_index: research/evidence-index.md
     if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const active = activeDocument.value;
+    const base = `.paper-notes/snapshots/${timestamp}`;
+    const copied: string[] = [];
+    const skipped: string[] = [];
+    const textKinds: DocumentKind[] = ['markdown', 'latex', 'bibtex', 'text'];
+    const nodes = flattenFileNodes(fileTree.value).filter((node) => node.kind === 'file' && textKinds.includes(node.documentKind));
+
+    for (const node of nodes) {
+      try {
+        const content = await readWorkspaceFile(workspace.value.localDir, makeRelativePath(node.path));
+        await writeWorkspaceFile(workspace.value.localDir, `${base}/files/${node.path}`, content);
+        copied.push(node.path);
+      } catch {
+        skipped.push(node.path);
+      }
+    }
+
+    const extraFiles = [
+      '.paper-notes/annotations.jsonl',
+      '.paper-notes/review-items.jsonl',
+      '.paper-notes/review-summary.md',
+      '.paper-notes/project.json',
+      '.paper-notes/export-profiles.json',
+      'refs.bib',
+    ];
+    for (const path of extraFiles) {
+      try {
+        const content = await readWorkspaceFile(workspace.value.localDir, path);
+        await writeWorkspaceFile(workspace.value.localDir, `${base}/meta/${path}`, content);
+        copied.push(path);
+      } catch {}
+    }
+
     const lines = [
       '# 本地快照',
       '',
@@ -2774,19 +3747,29 @@ evidence_index: research/evidence-index.md
       `- 工作区：${workspace.value.localDir}`,
       `- 当前文件：${active?.relativePath || active?.title || '未打开'}`,
       `- 当前字数：${activeWritingStatsLabel.value}`,
+      `- 已复制文本/配置文件：${copied.length}`,
+      `- 跳过文件：${skipped.length}`,
       '',
       '## 说明',
       '',
-      '这是 v0.9 框架版的轻量快照 manifest。后续 TODO：复制文件内容、生成 diff、支持恢复。',
+      '该快照会复制 Markdown、LaTeX、BibTeX、文本文件、批注、refs.bib 和关键项目配置；PDF、图片和日志等大文件不会复制到快照中。',
+      '',
+      '## 已复制文件',
+      '',
+      ...copied.map((item) => `- ${item}`),
+      '',
+      '## 跳过文件',
+      '',
+      ...(skipped.length ? skipped.map((item) => `- ${item}`) : ['- 无']),
       '',
       '## 未提交/变更',
       '',
       ...(gitEntries.value.length ? gitEntries.value.map((entry) => `- ${entry.code} ${entry.path}`) : ['- 当前没有 Git 变更记录，或这是非 Git 本地工作区。']),
       '',
     ];
-    const path = `.paper-notes/snapshots/${timestamp}/manifest.md`;
+    const path = `${base}/manifest.md`;
     await writeWorkspaceFile(workspace.value.localDir, path, lines.join('\n'));
-    status.value = `已创建轻量快照：${path}`;
+    status.value = `已创建本地快照：${path}`;
     await refreshWorkspace();
   }
 
@@ -2795,7 +3778,9 @@ evidence_index: research/evidence-index.md
       1.25,
       Math.max(0.45, Number(value) || 0.72),
     );
+    projectSettings.value = { ...projectSettings.value, pdfRenderQuality: pdfRenderQuality.value };
     status.value = `PDF 预览分辨率：${Math.round(pdfRenderQuality.value * 100)}%`;
+    await persistProjectSettings();
     await persist();
   }
 
@@ -2811,10 +3796,17 @@ evidence_index: research/evidence-index.md
     const index = documents.value.findIndex((doc) => doc.id === id);
     if (index < 0) return;
     documents.value.splice(index, 1);
-    if (!documents.value.length) documents.value.push(defaultDocument());
     if (activeDocumentId.value === id) {
       activeDocumentId.value =
         documents.value[Math.max(0, index - 1)]?.id ?? documents.value[0]?.id;
+    }
+    if (!documents.value.length) {
+      activeDocumentId.value = undefined;
+      previewVisible.value = false;
+      pdfPreviewUrl.value = "";
+      pdfPreviewPath.value = "";
+      activeBibPreviewKey.value = undefined;
+      status.value = "所有文件已关闭。可从左侧文档树或顶部入口重新打开文件。";
     }
     await persist();
   }
@@ -2856,6 +3848,14 @@ evidence_index: research/evidence-index.md
     latexIndex,
     activeBibPreviewKey,
     activeBibPreview,
+    toolPaths,
+    environmentChecks,
+    layoutSettings,
+    projectSettings,
+    exportProfiles,
+    researchFlowStatuses,
+    recoveryWarning,
+    draftCount,
     activeDocumentDiagnostics,
     activeWritingStats,
     activeWritingStatsLabel,
@@ -2868,6 +3868,18 @@ evidence_index: research/evidence-index.md
     isMarkdownActive,
     initialize,
     persist,
+    persistCleanShutdown,
+    setLayoutSettings,
+    setEditorSidePanelWidth,
+    setToolPath,
+    runEnvironmentCheck,
+    exportDebugBundle,
+    persistProjectSettings,
+    setProjectSetting,
+    updateResearchFlowPath,
+    startGuidedWorkflow,
+    openSampleWorkspace,
+    openResearchFlowEntry,
     setGithubToken,
     forgetGithubToken,
     cloneWorkspace,
@@ -2882,6 +3894,7 @@ evidence_index: research/evidence-index.md
     setEditorCursorLine,
     selectNode,
     updateActiveText,
+    updateDocumentText,
     openWorkspaceFile,
     previewExistingPdfForTex,
     saveActiveLocal,
@@ -2905,6 +3918,8 @@ evidence_index: research/evidence-index.md
     addAnnotationReply,
     updateAnnotationMessage,
     exportAnnotationsMarkdown,
+    exportAnnotations,
+    convertAnnotationToTask,
     exportMarkdownFormat,
     createProjectFromTemplate,
     createDailyNote,
@@ -2920,6 +3935,9 @@ evidence_index: research/evidence-index.md
     syncTexForwardFromEditor,
     syncTexReverseFromPdf,
     setActiveBibPreviewKey,
+    createBibEntry,
+    updateBibEntryRaw,
+    removeBibEntry,
     openLatexOutlineItem,
     openLatexIndexedPath,
     jumpToLatexLabel,

@@ -4,6 +4,7 @@ import type {
   PaperAnnotation,
   PaperAnnotationMessage,
   PaperAnnotationStatus,
+  AnnotationExportFormat,
 } from "../types/app";
 
 const props = defineProps<{
@@ -16,18 +17,25 @@ const props = defineProps<{
 const emit = defineEmits<{
   jump: [annotation: PaperAnnotation];
   status: [payload: { id: string; status: PaperAnnotationStatus }];
+  task: [id: string];
   remove: [id: string];
   reply: [payload: { id: string; body: string }];
   editMessage: [payload: { id: string; messageId: string; body: string }];
   exportMarkdown: [];
+  export: [format: AnnotationExportFormat];
   close: [];
 }>();
 
 type StatusFilter = "all" | PaperAnnotationStatus;
 type TimeFilter = "all" | "today" | "yesterday" | "3d";
+type TypeFilter = "all" | PaperAnnotation["type"];
+type AnchorFilter = "all" | AnchorState;
 
 const filter = ref<StatusFilter>("open");
 const timeFilter = ref<TimeFilter>("all");
+const typeFilter = ref<TypeFilter>("all");
+const anchorFilter = ref<AnchorFilter>("all");
+const chapterFilter = ref("all");
 const query = ref("");
 
 function timestampOf(item: PaperAnnotation) {
@@ -114,6 +122,9 @@ const filtered = computed(() => {
   );
   return list.filter((item) => {
     if (filter.value !== "all" && item.status !== filter.value) return false;
+    if (typeFilter.value !== "all" && item.type !== typeFilter.value) return false;
+    if (anchorFilter.value !== "all" && anchorState(item) !== anchorFilter.value) return false;
+    if (chapterFilter.value !== "all" && labelFor(item).split(":")[0] !== chapterFilter.value) return false;
     if (!inTimeRange(item)) return false;
     if (keyword && !searchableText(item).includes(keyword)) return false;
     return true;
@@ -151,6 +162,9 @@ const counts = computed(() => ({
     .length,
   ignored: props.annotations.filter((item) => item.status === "ignored").length,
 }));
+
+const typeOptions = computed(() => Array.from(new Set(props.annotations.map((item) => item.type))).sort());
+const chapterOptions = computed(() => Array.from(new Set(props.annotations.map((item) => labelFor(item).split(":")[0]).filter(Boolean))).sort());
 
 function dateGroupLabel(stamp: number) {
   if (!stamp) return "未知时间";
@@ -246,9 +260,12 @@ function onHeaderDblclick(event: MouseEvent) {
         <h3>批注</h3>
         <small>{{ activePath || "当前文件" }}</small>
       </div>
-      <button class="secondary" title="导出当前文件批注为 Markdown" @click="emit('exportMarkdown')">
-        导出
-      </button>
+      <div class="annotation-export-buttons">
+        <button class="secondary" title="导出 Markdown" @click="emit('export', 'markdown')">MD</button>
+        <button class="secondary" title="导出 JSONL" @click="emit('export', 'jsonl')">JSONL</button>
+        <button class="secondary" title="导出 CSV" @click="emit('export', 'csv')">CSV</button>
+        <button class="secondary" title="导出 LaTeX todonotes" @click="emit('export', 'latex-todonotes')">TODO</button>
+      </div>
     </header>
 
     <div class="annotation-search-row">
@@ -283,6 +300,26 @@ function onHeaderDblclick(event: MouseEvent) {
       </div>
     </div>
 
+    <div class="annotation-filter-block annotation-advanced-filter">
+      <label>类型 / 锚点 / 章节</label>
+      <div class="annotation-select-row">
+        <select v-model="typeFilter" title="按批注类型筛选">
+          <option value="all">全部类型</option>
+          <option v-for="type in typeOptions" :key="type" :value="type">{{ typeLabel(type) }}</option>
+        </select>
+        <select v-model="anchorFilter" title="按锚点稳定性筛选">
+          <option value="all">全部锚点</option>
+          <option value="stable">稳定</option>
+          <option value="unstable">需复核</option>
+          <option value="unbound">未绑定</option>
+        </select>
+        <select v-model="chapterFilter" title="按文件/章节筛选">
+          <option value="all">全部文件</option>
+          <option v-for="chapter in chapterOptions" :key="chapter" :value="chapter">{{ chapter }}</option>
+        </select>
+      </div>
+    </div>
+
     <div v-if="!filtered.length" class="empty-state small annotation-empty">
       当前文件暂无符合条件的批注。可在 PDF 或 Markdown 预览中选中文字后点击“批注”；图表、公式和版式问题可使用“区域批注”。
     </div>
@@ -307,6 +344,8 @@ function onHeaderDblclick(event: MouseEvent) {
         <div class="annotation-location" :title="labelFor(item)">{{ labelFor(item) }}</div>
         <div v-if="quoteFor(item)" class="annotation-quote">“{{ quoteFor(item) }}”</div>
         <div v-if="item.needsReviewReason" class="annotation-review-warning">{{ item.needsReviewReason }}</div>
+        <div v-if="item.resolutionNote" class="annotation-resolution-note">解决说明：{{ item.resolutionNote }}</div>
+        <div v-if="item.taskMarker" class="annotation-task-note">任务标记：{{ item.taskMarker.file }}:{{ item.taskMarker.line }}</div>
 
         <div class="annotation-thread" @click.stop>
           <div v-for="(message, index) in messagesFor(item)" :key="message.id" class="annotation-message">
@@ -325,6 +364,7 @@ function onHeaderDblclick(event: MouseEvent) {
         </div>
         <div class="annotation-actions" @click.stop>
           <button @click="addReply(item)">回复</button>
+          <button v-if="!item.taskMarker" @click="emit('task', item.id)">转任务</button>
           <button v-if="item.status !== 'open'" @click="emit('status', { id: item.id, status: 'open' })">重新打开</button>
           <button v-if="item.status !== 'resolved'" @click="emit('status', { id: item.id, status: 'resolved' })">解决</button>
           <button v-if="item.status !== 'ignored'" @click="emit('status', { id: item.id, status: 'ignored' })">忽略</button>

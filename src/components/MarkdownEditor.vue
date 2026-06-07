@@ -33,6 +33,7 @@ const props = defineProps<{
   diagnostics?: LatexDiagnosticItem[];
   rootDir?: string;
   currentPath?: string;
+  fontSize?: number;
 }>();
 
 const emit = defineEmits<{
@@ -52,6 +53,9 @@ let applyingExternalUpdate = false;
 let lastEmittedValue: string | null = null;
 let flashTimer = 0;
 
+const hostStyle = computed(() => ({
+  '--editor-font-size': `${Math.min(28, Math.max(11, props.fontSize || 14))}px`,
+}));
 
 const flashLineEffect = StateEffect.define<{ from: number }>();
 const clearFlashLineEffect = StateEffect.define<void>();
@@ -195,8 +199,12 @@ function labelSummary(label?: LatexLabelItem) {
   return [label.kind, `${label.file}:${label.line}`].filter(Boolean).join(' · ');
 }
 
-function isPreviewableImagePath(path: string) {
-  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path);
+function isPreviewableAssetPath(path: string) {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|pdf)$/i.test(path);
+}
+
+function isPdfPath(path: string) {
+  return /\.pdf$/i.test(path);
 }
 
 function appendText(parent: HTMLElement, tag: string, text: string, className?: string) {
@@ -247,26 +255,34 @@ function createLatexHoverDom(target: NonNullable<ReturnType<typeof latexTargetAt
   appendText(dom, 'strong', target.key);
   appendText(dom, 'small', resolvedPath ? `解析到：${resolvedPath}` : '未找到对应文件');
 
-  if (target.command === 'includegraphics' && resolvedPath && isPreviewableImagePath(resolvedPath)) {
+  if (target.command === 'includegraphics' && resolvedPath && isPreviewableAssetPath(resolvedPath)) {
     const frame = document.createElement('div');
-    frame.className = 'cm-latex-image-preview';
-    frame.textContent = '正在加载图片…';
+    frame.className = isPdfPath(resolvedPath) ? 'cm-latex-image-preview pdf-preview' : 'cm-latex-image-preview';
+    frame.textContent = isPdfPath(resolvedPath) ? '正在加载 PDF 首页缩略预览…' : '正在加载图片…';
     dom.appendChild(frame);
     if (props.rootDir) {
       readWorkspaceDataUrl(props.rootDir, '', resolvedPath)
         .then((src) => {
           frame.textContent = '';
-          const img = document.createElement('img');
-          img.src = src;
-          img.alt = resolvedPath;
-          frame.appendChild(img);
+          if (isPdfPath(resolvedPath)) {
+            const embed = document.createElement('embed');
+            embed.src = `${src}#page=1&toolbar=0&navpanes=0`;
+            embed.type = 'application/pdf';
+            embed.title = resolvedPath;
+            frame.appendChild(embed);
+          } else {
+            const img = document.createElement('img');
+            img.src = src;
+            img.alt = resolvedPath;
+            frame.appendChild(img);
+          }
         })
         .catch((error) => {
           frame.textContent = error instanceof Error ? error.message : String(error);
         });
     }
   } else if (target.command === 'includegraphics' && resolvedPath) {
-    appendText(dom, 'small', '该图片格式不支持内嵌缩略图，可 Ctrl/⌘ 点击打开预览。');
+    appendText(dom, 'small', '该资源格式不支持内嵌缩略图，可 Ctrl/⌘ 点击打开预览。');
   }
 
   return dom;
@@ -453,7 +469,7 @@ function createExtensions() {
     }),
     EditorView.theme({
       '&': { height: '100%' },
-      '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: '14px', lineHeight: '1.65' },
+      '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--editor-font-size, 14px)', lineHeight: '1.65' },
       '.cm-content': { padding: '24px 20px 60px' },
       '.cm-gutters': { borderRight: '1px solid var(--border)' },
     }),
@@ -519,5 +535,5 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="editor-host" />
+  <div ref="host" class="editor-host" :style="hostStyle" />
 </template>

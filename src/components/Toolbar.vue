@@ -9,6 +9,8 @@ const props = defineProps<{
   templatePanelVisible?: boolean;
   gitDirtyCount?: number;
   githubWorkspace?: boolean;
+  previewAvailable?: boolean;
+  previewVisible?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -16,6 +18,7 @@ const emit = defineEmits<{
   toggleExplorer: [];
   toggleGitPanel: [];
   openTemplates: [];
+  togglePreview: [];
 }>();
 </script>
 
@@ -34,6 +37,15 @@ const emit = defineEmits<{
     <div class="actions compact-actions">
       <button class="primary template-toolbar-button" :class="{ active: props.templatePanelVisible }" :title="props.templatePanelVisible ? '隐藏模板栏' : '显示模板栏'" @click="emit('openTemplates')">
         模板
+      </button>
+      <button
+        class="toolbar-icon"
+        :class="{ active: props.previewVisible }"
+        :disabled="!props.previewAvailable"
+        :title="props.previewVisible ? '隐藏预览栏' : '显示预览栏'"
+        @click="emit('togglePreview')"
+      >
+        ◫
       </button>
       <button
         :disabled="props.busy || !props.githubWorkspace || !props.gitDirtyCount"

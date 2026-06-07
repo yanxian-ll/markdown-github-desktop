@@ -37,6 +37,18 @@ export interface BuiltinTemplate {
   license?: TemplateLicense;
   tags?: string[];
   files: TemplateFile[];
+  /** true 表示对应公开上游模板；false 表示 Scholia 本地 starter。 */
+  official?: boolean;
+  version?: string;
+  upstreamUrl?: string;
+  lastCheckedAt?: string;
+  smokeTest?: {
+    mainFile: string;
+    requiredFiles: string[];
+    bibliography?: string;
+    graphicPath?: string;
+    expectedEngine?: string;
+  };
   roadmap?: string[];
 }
 

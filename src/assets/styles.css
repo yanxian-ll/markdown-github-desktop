@@ -347,6 +347,8 @@ kbd {
   grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 .editor-layout.preview-hidden {
   grid-template-columns: 1fr;
@@ -355,6 +357,7 @@ kbd {
 .preview-column {
   min-width: 0;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 .preview-column {
@@ -366,7 +369,22 @@ kbd {
   background: #ffffff;
 }
 .editor-host {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
   height: 100%;
+  overflow: hidden;
+}
+
+.editor-host .cm-editor,
+.editor-host .cm-scroller {
+  height: 100%;
+}
+.editor-host .cm-editor {
+  min-height: 0;
+}
+.editor-host .cm-scroller {
+  overflow: auto;
 }
 
 .markdown-preview {
@@ -2006,6 +2024,8 @@ button:disabled {
 /* v0.6.0: LaTeX writing intelligence. */
 .editor-column {
   position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .outline-panel {
   margin-top: 10px;
@@ -2218,7 +2238,7 @@ button:disabled {
 /* v0.6.3: editor topbar and current-file outline panel. */
 .editor-column {
   display: grid;
-  grid-template-rows: 38px minmax(0, 1fr);
+  grid-template-rows: auto 38px minmax(0, 1fr);
   background: var(--panel);
 }
 .editor-header {
@@ -2279,6 +2299,8 @@ button:disabled {
 }
 .editor-body-layout {
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
@@ -2288,8 +2310,11 @@ button:disabled {
 .editor-code-pane {
   min-width: 0;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
 }
 .editor-outline-panel {
   min-width: 0;
@@ -4049,3 +4074,352 @@ textarea::placeholder {
 .markdown-style-manuscript blockquote {
   font-family: var(--font-sans);
 }
+
+.environment-section .field-stack label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tool-check {
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+.tool-check span {
+  display: grid;
+  gap: 3px;
+  overflow: visible;
+  white-space: normal;
+}
+.tool-check.ok code {
+  color: var(--ok);
+}
+.tool-check.error code {
+  color: var(--danger);
+}
+.tool-check.warning code,
+.warning-text {
+  color: var(--warn);
+}
+.install-hint {
+  color: var(--muted);
+}
+button.mini {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.research-flow-status {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.research-flow-status.ready {
+  color: var(--ok);
+}
+.research-flow-status.todo {
+  color: var(--muted);
+}
+.research-flow-status.blocked {
+  color: var(--warn);
+}
+.welcome-subtitle {
+  max-width: 780px;
+}
+.welcome-flow-grid {
+  max-width: 1180px;
+  margin: 0 auto 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.welcome-flow-card {
+  text-align: left;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 16px;
+  min-height: 142px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(127, 127, 127, 0.08);
+}
+.welcome-flow-card strong {
+  color: var(--text);
+  font-size: 17px;
+}
+.welcome-flow-card span {
+  color: var(--muted);
+  line-height: 1.65;
+}
+.welcome-flow-card small {
+  margin-top: auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+.welcome-shortcuts-card {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(127, 127, 127, 0.08);
+  color: var(--muted);
+}
+.welcome-shortcuts-card strong {
+  color: var(--text);
+}
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-tabs button {
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.settings-tabs button.active,
+.bib-toolbar-row button.active {
+  color: var(--accent);
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(96, 165, 250, 0.12);
+}
+.export-profile-list,
+.bib-card-actions,
+.research-flow-actions,
+.annotation-export-buttons,
+.annotation-select-row,
+.bib-toolbar-row,
+.editor-outline-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.annotation-export-buttons button {
+  min-width: 0;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+.annotation-select-row select,
+.editor-outline-tools select,
+.editor-outline-tools input,
+.bib-toolbar-row input {
+  min-width: 0;
+  flex: 1;
+}
+.annotation-resolution-note,
+.annotation-task-note,
+.research-flow-missing {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.annotation-task-note {
+  color: var(--accent);
+}
+.research-flow-actions {
+  justify-content: flex-end;
+  align-self: center;
+}
+.bib-card.editable {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+}
+.bib-card-main {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.bib-card-actions,
+.bib-table-actions {
+  justify-content: flex-end;
+}
+.bib-table-wrap {
+  overflow: auto;
+}
+.bib-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.bib-table th,
+.bib-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.editor-outline-tools {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.editor-outline-tools input {
+  flex-basis: 100%;
+}
+.cm-latex-image-preview.pdf-preview embed {
+  width: 260px;
+  height: 180px;
+  border: 0;
+  border-radius: 8px;
+  background: white;
+}
+
+/* v0.10.8: stable compact outline, BibTeX cards and document tabs. */
+.editor-outline-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.editor-outline-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px 46px 46px;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  flex-wrap: nowrap;
+  min-height: 0;
+}
+.editor-outline-tools input {
+  flex-basis: auto;
+  width: 100%;
+}
+.editor-outline-tools select {
+  width: 82px;
+  font-size: 12px;
+}
+.editor-outline-tools button {
+  min-width: 0;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.editor-outline-tree {
+  grid-row: 3;
+  min-height: 0;
+}
+.bib-toolbar-row.compact {
+  flex-wrap: nowrap;
+  padding: 10px;
+}
+.bib-entry-editor {
+  display: grid;
+  gap: 8px;
+  margin: 0 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(127, 127, 127, 0.08);
+}
+.bib-entry-editor-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.bib-entry-editor label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.bib-entry-editor input,
+.bib-entry-editor select,
+.bib-entry-editor textarea {
+  width: 100%;
+  min-width: 0;
+}
+.muted-text {
+  color: var(--muted);
+}
+.document-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.document-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 96px;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-bottom-color: transparent;
+  border-radius: 9px 9px 0 0;
+  background: rgba(127, 127, 127, 0.07);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.document-tab.active {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.document-tab-kind {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 900;
+}
+.document-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+.document-tab-dot {
+  color: var(--warn);
+  font-size: 10px;
+}
+.document-tab-close {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.document-tab-close:hover {
+  color: var(--text);
+  background: rgba(127, 127, 127, 0.14);
+}
+.editor-stack {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+}
+.editor-group {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid transparent;
+}
+.editor-group:focus-within,
+.editor-group:hover {
+  border-color: rgba(96, 165, 250, 0.28);
+}
+

@@ -77,6 +77,29 @@ struct TexSourcePoint {
     column: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ToolPathOverrides {
+    pandoc: Option<String>,
+    xelatex: Option<String>,
+    latexmk: Option<String>,
+    synctex: Option<String>,
+    git: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentToolCheck {
+    id: String,
+    label: String,
+    ok: bool,
+    required: bool,
+    command: String,
+    version: Option<String>,
+    error: Option<String>,
+    install_hint: String,
+}
+
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -100,6 +123,11 @@ fn load_app_state(app: AppHandle) -> Result<Value, String> {
 fn save_app_state(app: AppHandle, state: Value) -> Result<(), String> {
     let path = state_path(&app)?;
     let content = serde_json::to_string_pretty(&state).map_err(|error| format!("无法序列化状态：{error}"))?;
+    // 第二道保险：前端已经会剔除工作区 PDF/图片和超大草稿，这里避免异常状态文件
+    // 把应用拖慢到无法启动。5MB 足够保存 UI、草稿和项目元数据。
+    if content.len() > 5 * 1024 * 1024 {
+        return Err("状态文件超过 5MB，已阻止写入；请检查是否有大文件被误放入 appState。".into());
+    }
     fs::write(path, content).map_err(|error| format!("无法写入状态文件：{error}"))
 }
 
@@ -116,6 +144,100 @@ fn current_system_username() -> Result<Option<String>, String> {
         }
     }
     Ok(None)
+}
+
+fn cleaned_tool_path(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn tool_program<'a>(id: &str, overrides: &'a ToolPathOverrides) -> String {
+    match id {
+        "pandoc" => cleaned_tool_path(&overrides.pandoc).unwrap_or_else(|| "pandoc".into()),
+        "xelatex" => cleaned_tool_path(&overrides.xelatex).unwrap_or_else(|| "xelatex".into()),
+        "latexmk" => cleaned_tool_path(&overrides.latexmk).unwrap_or_else(|| "latexmk".into()),
+        "synctex" => cleaned_tool_path(&overrides.synctex).unwrap_or_else(|| "synctex".into()),
+        "git" => cleaned_tool_path(&overrides.git).unwrap_or_else(|| "git".into()),
+        other => other.into(),
+    }
+}
+
+fn install_hint(id: &str) -> &'static str {
+    match id {
+        "pandoc" => "Windows: winget install JohnMacFarlane.Pandoc；macOS: brew install pandoc；Linux: sudo apt install pandoc。",
+        "xelatex" => "安装 TeX Live 或 MiKTeX；Windows 可用 install-tl-windows 或 MiKTeX，macOS 可用 MacTeX，Linux 可用 texlive-xetex。",
+        "latexmk" => "安装 TeX Live/MiKTeX 完整组件；Linux 常见包为 latexmk，Windows/MacTeX 通常随 TeX Live 提供。",
+        "synctex" => "随 TeX Live/MiKTeX 安装。需要构建时启用 -synctex=1 才能双向定位。",
+        "git" => "Windows: winget install Git.Git；macOS: xcode-select --install 或 brew install git；Linux: sudo apt install git。",
+        _ => "请安装该命令并确保路径在 PATH 中，或在设置中手动填写可执行文件路径。",
+    }
+}
+
+fn version_args(id: &str) -> Vec<&'static str> {
+    match id {
+        "synctex" => vec!["--version"],
+        _ => vec!["--version"],
+    }
+}
+
+fn first_version_line(output: &[u8], stderr: &[u8]) -> Option<String> {
+    let text = format!("{}{}", String::from_utf8_lossy(output), String::from_utf8_lossy(stderr));
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(220).collect())
+}
+
+fn check_one_tool(id: &str, label: &str, required: bool, overrides: &ToolPathOverrides) -> EnvironmentToolCheck {
+    let command = tool_program(id, overrides);
+    let output = Command::new(&command).args(version_args(id)).output();
+    match output {
+        Ok(output) if output.status.success() => EnvironmentToolCheck {
+            id: id.into(),
+            label: label.into(),
+            ok: true,
+            required,
+            command,
+            version: first_version_line(&output.stdout, &output.stderr),
+            error: None,
+            install_hint: install_hint(id).into(),
+        },
+        Ok(output) => EnvironmentToolCheck {
+            id: id.into(),
+            label: label.into(),
+            ok: false,
+            required,
+            command,
+            version: first_version_line(&output.stdout, &output.stderr),
+            error: Some(format!("命令返回非零状态：{}", output.status)),
+            install_hint: install_hint(id).into(),
+        },
+        Err(error) => EnvironmentToolCheck {
+            id: id.into(),
+            label: label.into(),
+            ok: false,
+            required,
+            command,
+            version: None,
+            error: Some(format!("无法执行：{error}")),
+            install_hint: install_hint(id).into(),
+        },
+    }
+}
+
+#[tauri::command]
+fn check_environment(tool_paths: Option<ToolPathOverrides>) -> Result<Vec<EnvironmentToolCheck>, String> {
+    let overrides = tool_paths.unwrap_or_default();
+    Ok(vec![
+        check_one_tool("pandoc", "Pandoc", true, &overrides),
+        check_one_tool("xelatex", "XeLaTeX", true, &overrides),
+        check_one_tool("latexmk", "latexmk", false, &overrides),
+        check_one_tool("synctex", "SyncTeX", true, &overrides),
+        check_one_tool("git", "Git", true, &overrides),
+    ])
 }
 
 #[tauri::command]
@@ -355,7 +477,7 @@ fn read_workspace_data_url(root_dir: String, current_relative_path: String, asse
     let root = PathBuf::from(root_dir);
     let src = asset_src.trim();
     if src.is_empty() || src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:") {
-        return Err("不是本地图片路径。".into());
+        return Err("不是本地图片/PDF 路径。".into());
     }
     let cleaned = src
         .split('#')
@@ -379,12 +501,12 @@ fn read_workspace_data_url(root_dir: String, current_relative_path: String, asse
     };
     let path = safe_join(&root, &relative)?;
     if !path.exists() {
-        return Err(format!("图片不存在：{}", path.display()));
+        return Err(format!("图片/PDF 不存在：{}", path.display()));
     }
-    if !is_image_file(&path) {
-        return Err(format!("不是支持的图片文件：{}", path.display()));
+    if !is_image_file(&path) && !is_pdf_file(&path) {
+        return Err(format!("不是支持的图片/PDF 文件：{}", path.display()));
     }
-    let bytes = fs::read(&path).map_err(|error| format!("无法读取图片 {}：{error}", path.display()))?;
+    let bytes = fs::read(&path).map_err(|error| format!("无法读取图片/PDF {}：{error}", path.display()))?;
     Ok(format!("data:{};base64,{}", mime_for_path(&path), encode_base64(&bytes)))
 }
 
@@ -397,6 +519,220 @@ fn read_file_data_url(path: String) -> Result<String, String> {
     }
     let bytes = fs::read(&path).map_err(|error| format!("无法读取文件 {}：{error}", path.display()))?;
     Ok(format!("data:{};base64,{}", mime_for_path(&path), encode_base64(&bytes)))
+}
+
+fn minimal_pdf_bytes(label: &str) -> Vec<u8> {
+    let escaped = label
+        .replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)");
+    let stream = format!("BT /F1 24 Tf 72 720 Td ({escaped}) Tj ET\n");
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{}endstream", stream.as_bytes().len(), stream),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets: Vec<usize> = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.as_bytes().len());
+        pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+    }
+    let xref_offset = pdf.as_bytes().len();
+    pdf.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1));
+    for offset in offsets {
+        pdf.push_str(&format!("{:010} 00000 n \n", offset));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        objects.len() + 1,
+        xref_offset
+    ));
+    pdf.into_bytes()
+}
+
+fn write_sample_file(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建目录 {}：{error}", parent.display()))?;
+    }
+    fs::write(path, content).map_err(|error| format!("无法写入示例文件 {}：{error}", path.display()))
+}
+
+#[tauri::command]
+fn create_sample_workspace(app: AppHandle) -> Result<String, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录：{error}"))?
+        .join("sample-workspace");
+    fs::create_dir_all(&base).map_err(|error| format!("无法创建示例工作区：{error}"))?;
+
+    write_sample_file(&base.join("README.md"), r#"# Scholia Studio 示例工作区
+
+这个工作区用于验证“记录 → 证据 → 论文 → 审阅”的核心流程。
+
+- `paper/main.tex`：可编译的最小 LaTeX 论文示例。
+- `paper/paper.md`：Pandoc Markdown 论文示例。
+- `paper/sample-review.pdf`：用于测试 PDF 预览和批注入口的示例 PDF。
+- `notes/daily/2026-06-06.md`：结构化每日研究记录。
+- `notes/weekly/2026-W23.md`：周报示例。
+- `research/evidence-index.md`：证据索引示例。
+- `.paper-notes/annotations.jsonl`：统一批注/审阅条目示例。
+"#)?;
+
+    write_sample_file(&base.join("paper/main.tex"), r#"% !TEX root = main.tex
+% !TEX program = xelatex
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+
+\title{Scholia Studio Sample Paper}
+\author{Scholia Studio}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}\label{sec:introduction}
+This sample shows a minimal paper project with one citation~\cite{knuth1984texbook}.
+
+\section{Method}\label{sec:method}
+Record claims in daily notes, promote them into the evidence index, and then cite them in the paper.
+
+\section{Result}\label{sec:result}
+Review comments can point back to source lines and PDF pages.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}
+"#)?;
+
+    write_sample_file(&base.join("paper/latexmkrc"), r#"# Scholia Studio sample workspace uses XeLaTeX for consistent Unicode handling.
+$pdf_mode = 5;
+$xelatex = 'xelatex -interaction=nonstopmode -synctex=1 -file-line-error %O %S';
+$bibtex_use = 2;
+"#)?;
+
+    write_sample_file(&base.join("paper/refs.bib"), r#"@book{knuth1984texbook,
+  title = {The TeXbook},
+  author = {Knuth, Donald E.},
+  year = {1984},
+  publisher = {Addison-Wesley}
+}
+"#)?;
+
+    write_sample_file(&base.join("paper/paper.md"), r#"---
+title: Scholia Studio Markdown Sample
+author: Scholia Studio
+bibliography: refs.bib
+---
+
+# Introduction
+
+This Markdown paper can be exported with Pandoc and cites [@knuth1984texbook].
+
+# Evidence
+
+- Claim: local-first research notes reduce context switching.
+- Evidence: see `research/evidence-index.md`.
+"#)?;
+
+    write_sample_file(&base.join("notes/daily/2026-06-06.md"), r#"---
+type: daily-note
+date: 2026-06-06
+---
+
+# 2026-06-06 每日研究记录
+
+## 工作记录
+- 搭建示例工作区，验证 Markdown、LaTeX、PDF 批注入口。
+
+## 可能进入论文的结论
+- 本地优先的研究记录可以直接沉淀为论文证据。
+
+## 问题与风险
+- 需要检查 LaTeX/Pandoc 依赖是否已安装。
+
+## 明日计划
+- 使用证据索引生成论文大纲。
+"#)?;
+
+    write_sample_file(&base.join("notes/weekly/2026-W23.md"), r#"---
+type: weekly-report
+week: 2026-W23
+---
+
+# 2026-W23 周报
+
+## 本周完成
+- 完成示例项目骨架。
+
+## 证据沉淀
+- 示例论文、每日笔记和批注已经互相关联。
+
+## 风险
+- 尚未连接真实项目数据。
+
+## 下周计划
+- 替换为自己的论文和记录。
+"#)?;
+
+    write_sample_file(&base.join("research/evidence-index.md"), r#"# 证据索引
+
+| 结论 | 来源 | 状态 | 可用于论文位置 |
+| --- | --- | --- | --- |
+| 本地优先研究记录可以沉淀为论文证据 | notes/daily/2026-06-06.md | candidate | Introduction |
+"#)?;
+
+    write_sample_file(&base.join("paper/paper-outline.md"), r#"# 论文大纲
+
+## Introduction
+- [ ] 引入研究问题。
+- [ ] 引用证据索引中的候选结论。
+
+## Method
+- [ ] 描述记录、证据、审阅闭环。
+
+## Result
+- [ ] 总结示例项目验证结果。
+"#)?;
+
+    write_sample_file(&base.join(".paper-notes/annotations.jsonl"), r#"{"id":"sample-ann-1","type":"comment","status":"open","body":"示例源码批注：这里可以转为修改任务。","messages":[{"id":"sample-msg-1","body":"示例源码批注：这里可以转为修改任务。","author":"Scholia","createdAt":"2026-06-06T00:00:00.000Z"}],"tags":["sample"],"documentPath":"paper/main.tex","texAnchor":{"file":"paper/main.tex","line":13,"lineEnd":13,"sourceText":"This sample shows a minimal paper project with one citation~\\cite{knuth1984texbook}."},"anchorConfidence":"stable","createdAt":"2026-06-06T00:00:00.000Z","updatedAt":"2026-06-06T00:00:00.000Z"}
+"#)?;
+
+    write_sample_file(&base.join(".paper-notes/project.json"), r#"{
+  "projectType": "mixed",
+  "mainTexFile": "paper/main.tex",
+  "mainMarkdownFile": "paper/paper.md",
+  "exportProfile": "pdf",
+  "pandocProfileId": "pdf",
+  "buildCommand": "auto",
+  "pdfRenderQuality": 0.72,
+  "researchFlowPaths": {
+    "dailyDir": "notes/daily",
+    "weeklyDir": "notes/weekly",
+    "evidenceIndex": "research/evidence-index.md",
+    "paperOutline": "paper/paper-outline.md",
+    "reviewSummary": ".paper-notes/review-summary.md"
+  }
+}
+"#)?;
+
+    write_sample_file(&base.join(".paper-notes/export-profiles.json"), r#"[
+  { "id": "pdf", "name": "PDF", "format": "pdf", "args": ["--pdf-engine=xelatex"], "description": "Pandoc PDF" },
+  { "id": "docx", "name": "Word DOCX", "format": "docx", "args": [], "description": "Word 文档" },
+  { "id": "html", "name": "HTML", "format": "html", "args": ["--standalone"], "description": "单文件 HTML" }
+]
+"#)?;
+
+    fs::write(base.join("paper/sample-review.pdf"), minimal_pdf_bytes("Scholia sample PDF"))
+        .map_err(|error| format!("无法写入示例 PDF：{error}"))?;
+
+    Ok(base.to_string_lossy().to_string())
 }
 
 
@@ -471,6 +807,14 @@ fn rename_workspace_item(root_dir: String, old_relative_path: String, new_relati
     fs::rename(&old_path, &new_path).map_err(|error| format!("无法重命名：{error}"))
 }
 
+fn safe_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
 #[tauri::command]
 fn delete_workspace_item(root_dir: String, relative_path: String) -> Result<(), String> {
     let root = PathBuf::from(root_dir);
@@ -478,12 +822,27 @@ fn delete_workspace_item(root_dir: String, relative_path: String) -> Result<(), 
     if !path.exists() {
         return Err(format!("路径不存在：{}", path.display()));
     }
-    let meta = fs::metadata(&path).map_err(|error| format!("无法读取路径元数据：{error}"))?;
-    if meta.is_dir() {
-        fs::remove_dir_all(&path).map_err(|error| format!("无法删除文件夹 {}：{error}", path.display()))
-    } else {
-        fs::remove_file(&path).map_err(|error| format!("无法删除文件 {}：{error}", path.display()))
+    let normalized = relative_path.trim().replace('\\', "/").trim_start_matches('/').to_string();
+    if normalized.starts_with(".paper-notes/trash/") {
+        let meta = fs::metadata(&path).map_err(|error| format!("无法读取路径元数据：{error}"))?;
+        return if meta.is_dir() {
+            fs::remove_dir_all(&path).map_err(|error| format!("无法删除回收站文件夹 {}：{error}", path.display()))
+        } else {
+            fs::remove_file(&path).map_err(|error| format!("无法删除回收站文件 {}：{error}", path.display()))
+        };
     }
+    let trash_relative = format!(".paper-notes/trash/{}/{}", safe_timestamp(), normalized);
+    let trash_path = safe_join(&root, &trash_relative)?;
+    if let Some(parent) = trash_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建回收站目录：{error}"))?;
+    }
+    fs::rename(&path, &trash_path).map_err(|error| {
+        format!(
+            "无法移动到本地回收站 {} → {}：{error}",
+            path.display(),
+            trash_path.display()
+        )
+    })
 }
 
 fn command_output(mut cmd: Command, label: &str) -> Result<String, String> {
@@ -620,41 +979,128 @@ fn commit_and_push(root_dir: String, branch: String, message: String, token: Opt
 fn parse_latex_diagnostics(log: &str) -> Vec<LatexDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut current_file: Option<String> = None;
+    let mut pending_error: Option<(String, Option<String>, Option<u32>)> = None;
+
     for line in log.lines() {
-        if line.ends_with(".tex") || line.contains(".tex:") {
-            if let Some(idx) = line.find(".tex") {
-                let start = line[..idx].rfind(|c| c == ' ' || c == '(' || c == '/' || c == '\\').map(|i| i + 1).unwrap_or(0);
-                current_file = Some(line[start..idx + 4].to_string());
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(idx) = trimmed.find(".tex") {
+            let start = trimmed[..idx]
+                .rfind(|c| c == ' ' || c == '(' || c == '/' || c == '\\')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            current_file = Some(trimmed[start..idx + 4].trim_matches('(').to_string());
+        }
+
+        // -file-line-error commonly emits: path/file.tex:12: message
+        if let Some(tex_idx) = trimmed.find(".tex:") {
+            let file_end = tex_idx + 4;
+            let rest = &trimmed[file_end + 1..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(line_no) = digits.parse::<u32>() {
+                let message = rest
+                    .trim_start_matches(|c: char| c.is_ascii_digit() || c == ':')
+                    .trim()
+                    .to_string();
+                diagnostics.push(LatexDiagnostic {
+                    level: if message.to_ascii_lowercase().contains("warning") { "warning" } else { "error" }.into(),
+                    message: if message.is_empty() { trimmed.to_string() } else { message },
+                    file: Some(trimmed[..file_end].to_string()),
+                    line: Some(line_no),
+                });
+                continue;
             }
         }
-        if let Some(rest) = line.strip_prefix('!') {
+
+        if let Some(rest) = trimmed.strip_prefix('!') {
+            pending_error = Some((rest.trim().to_string(), current_file.clone(), None));
             diagnostics.push(LatexDiagnostic {
                 level: "error".into(),
-                message: rest.trim().to_string(),
+                message: actionable_latex_message(rest.trim()),
                 file: current_file.clone(),
                 line: None,
             });
-        } else if line.contains(": error:") || line.contains("Error:") {
+            continue;
+        }
+
+        if let Some(line_no) = trimmed
+            .strip_prefix("l.")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<u32>().ok())
+        {
+            if let Some((message, file, _)) = pending_error.take() {
+                if let Some(last) = diagnostics.last_mut() {
+                    if last.level == "error" && last.line.is_none() {
+                        last.file = file;
+                        last.line = Some(line_no);
+                        last.message = actionable_latex_message(&message);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("undefined control sequence")
+            || lower.contains("file `") && lower.contains("' not found")
+            || lower.contains("emergency stop")
+            || lower.contains("fatal error")
+            || lower.contains("previous invocation of latexmk")
+            || lower.contains("gave an error in previous invocation")
+            || lower.contains(": error:")
+        {
             diagnostics.push(LatexDiagnostic {
                 level: "error".into(),
-                message: line.trim().to_string(),
+                message: actionable_latex_message(trimmed),
                 file: current_file.clone(),
                 line: None,
             });
-        } else if line.contains("LaTeX Warning:")
-            || line.contains("Package ") && line.contains(" Warning:")
-            || line.contains("Citation ") && line.contains("undefined")
-            || line.contains("Reference ") && line.contains("undefined")
+        } else if lower.contains("latex warning:")
+            || lower.contains("package ") && lower.contains(" warning:")
+            || lower.contains("citation `") && lower.contains("undefined")
+            || lower.contains("reference `") && lower.contains("undefined")
+            || lower.contains("undefined references")
+            || lower.contains("undefined citations")
+            || lower.contains("overfull \\hbox")
+            || lower.contains("underfull \\hbox")
+            || lower.contains("font warning")
         {
             diagnostics.push(LatexDiagnostic {
                 level: "warning".into(),
-                message: line.trim().to_string(),
+                message: actionable_latex_message(trimmed),
                 file: current_file.clone(),
                 line: None,
             });
         }
     }
+
     diagnostics
+}
+
+fn actionable_latex_message(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("undefined control sequence") {
+        format!("{message}｜可能缺少宏包或命令拼写错误；检查导言区 \\usepackage 和自定义命令。")
+    } else if lower.contains("citation `") && lower.contains("undefined") {
+        format!("{message}｜引用未定义；检查 refs.bib 是否包含该 key，并重新运行 BibTeX/Biber/latexmk。")
+    } else if lower.contains("reference `") && lower.contains("undefined") || lower.contains("undefined references") {
+        format!("{message}｜交叉引用未解析；检查 \\label 名称并至少重新编译两次。")
+    } else if lower.contains("file `") && lower.contains("' not found") {
+        format!("{message}｜文件缺失；检查图片/cls/sty/bib 路径、模板 vendor 文件是否完整。")
+    } else if lower.contains("font") && (lower.contains("not found") || lower.contains("warning")) {
+        format!("{message}｜字体相关问题；XeLaTeX 项目请确认系统已安装模板要求字体。")
+    } else if lower.contains("previous invocation of latexmk") || lower.contains("gave an error in previous invocation") {
+        format!("{message}｜latexmk 记录了上一次失败状态；请清理辅助文件后重建，或使用应用内‘清理辅助文件’快捷键 Ctrl/Cmd+Alt+K。")
+    } else if lower.contains("pdflatex") && (lower.contains("ctex") || lower.contains("fontspec") || lower.contains("xelatex")) {
+        format!("{message}｜当前可能用了 pdfLaTeX；含中文/CTeX/fontspec 的模板应使用 XeLaTeX。")
+    } else if lower.contains("overfull \\hbox") {
+        format!("{message}｜排版溢出；可检查长公式、长 URL、表格宽度或手动断行。")
+    } else {
+        message.to_string()
+    }
 }
 
 fn run_latex_command(work_dir: &Path, program: &str, args: &[&str]) -> Result<(bool, String), String> {
@@ -704,6 +1150,23 @@ fn normalize_latex_engine(value: &str) -> Option<&'static str> {
     }
 }
 
+fn latex_requires_xelatex(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("{csuthesis}")
+        || lower.contains("\\usepackage{ctex}")
+        || lower.contains("\\usepackage[utf8]{ctex}")
+        || lower.contains("\\documentclass{ctex")
+        || lower.contains("\\documentclass[") && lower.contains("]{ctex")
+        || lower.contains("\\usepackage{fontspec}")
+        || lower.contains("\\usepackage{xecjk}")
+        || lower.contains("\\setmainfont")
+        || lower.contains("\\setsansfont")
+        || lower.contains("\\setmonofont")
+        || lower.contains("\\setcjkmainfont")
+        || lower.contains("\\setcjksansfont")
+        || lower.contains("\\setcjkmonofont")
+}
+
 fn read_tex_program(tex_path: &Path) -> &'static str {
     let content = fs::read_to_string(tex_path).unwrap_or_default();
     for line in content.lines().take(60) {
@@ -718,7 +1181,7 @@ fn read_tex_program(tex_path: &Path) -> &'static str {
             }
         }
     }
-    if content.contains("\\documentclass") && content.contains("{CSUthesis}") {
+    if latex_requires_xelatex(&content) {
         return "xelatex";
     }
     "pdflatex"
@@ -735,6 +1198,31 @@ fn latexmk_mode_arg(engine: &str) -> &'static str {
 fn tex_uses_bibliography(tex_path: &Path) -> bool {
     let content = fs::read_to_string(tex_path).unwrap_or_default();
     content.contains("\\bibliography{") || content.contains("\\addbibresource{") || content.contains("\\printbibliography")
+}
+
+fn latexmk_previous_invocation_error(log: &str) -> bool {
+    let lower = log.to_ascii_lowercase();
+    lower.contains("gave an error in previous invocation of latexmk")
+        || lower.contains("previous invocation of latexmk")
+        || lower.contains("all targets") && lower.contains("up-to-date") && lower.contains("gave an error")
+}
+
+fn clean_latex_artifacts_for_tex(tex_path: &Path) -> Result<usize, String> {
+    let work_dir = tex_path.parent().ok_or_else(|| "无法获取 LaTeX 文件目录。".to_string())?;
+    let stem = tex_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
+    let exts = [
+        "aux", "bbl", "bcf", "blg", "fdb_latexmk", "fls", "log", "out", "run.xml",
+        "synctex.gz", "toc", "lof", "lot", "idx", "ilg", "ind", "nav", "snm", "vrb", "xdv",
+    ];
+    let mut removed = 0;
+    for ext in exts {
+        let path = work_dir.join(format!("{stem}.{ext}"));
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| format!("无法删除 {}：{error}", path.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -890,7 +1378,7 @@ fn preprocess_markdown_latex_blocks(markdown: &str) -> String {
     out
 }
 
-fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
+fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
     let root = PathBuf::from(root_dir);
     let md_path = safe_join(&root, &relative_path)?;
     if !md_path.exists() {
@@ -906,18 +1394,22 @@ fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String) -> Re
     let temp_path = build_dir.join(&temp_name);
     fs::write(&temp_path, preprocess_markdown_latex_blocks(&source)).map_err(|error| format!("无法写入 Pandoc 临时文件：{error}"))?;
     let pdf_path = md_path.with_extension("pdf");
-    let mut cmd = Command::new("pandoc");
+    let overrides = tool_paths.unwrap_or_default();
+    let pandoc = tool_program("pandoc", &overrides);
+    let xelatex = tool_program("xelatex", &overrides);
+    let mut cmd = Command::new(&pandoc);
     cmd.current_dir(work_dir)
         .arg(&temp_path)
         .args(["--from", "markdown+tex_math_dollars+raw_tex+yaml_metadata_block+fenced_divs"])
-        .args(["--standalone", "--pdf-engine=xelatex"])
+        .arg("--standalone")
+        .arg(format!("--pdf-engine={xelatex}"))
         .arg("-o")
         .arg(&pdf_path);
     let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
-    let log = format!("$ pandoc {file_name} --pdf-engine=xelatex -o {}\n{}{}", pdf_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let log = format!("$ {} {file_name} --pdf-engine={} -o {}\n{}{}", pandoc, xelatex, pdf_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     Ok(LatexBuildResult {
         ok: output.status.success() && pdf_path.exists(),
-        command: format!("pandoc {file_name} --pdf-engine=xelatex"),
+        command: format!("{} {file_name} --pdf-engine={}", pandoc, xelatex),
         pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
         diagnostics: parse_pandoc_diagnostics(&log, &relative_path),
         log,
@@ -925,8 +1417,8 @@ fn build_markdown_pandoc_blocking(root_dir: String, relative_path: String) -> Re
 }
 
 #[tauri::command]
-async fn build_markdown_pandoc(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
-    tauri::async_runtime::spawn_blocking(move || build_markdown_pandoc_blocking(root_dir, relative_path))
+async fn build_markdown_pandoc(root_dir: String, relative_path: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || build_markdown_pandoc_blocking(root_dir, relative_path, tool_paths))
         .await
         .map_err(|error| format!("Pandoc 后台任务失败：{error}"))?
 }
@@ -943,7 +1435,7 @@ fn pandoc_output_extension(format: &str) -> Result<&'static str, String> {
     }
 }
 
-fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, format: String) -> Result<LatexBuildResult, String> {
+fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
     let root = PathBuf::from(root_dir);
     let md_path = safe_join(&root, &relative_path)?;
     if !md_path.exists() {
@@ -964,24 +1456,27 @@ fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, form
         .save_file() else {
             return Ok(LatexBuildResult { ok: false, command: "pandoc export canceled".into(), pdf_path: None, log: "已取消导出。".into(), diagnostics: vec![] });
         };
-    let mut cmd = Command::new("pandoc");
+    let overrides = tool_paths.unwrap_or_default();
+    let pandoc = tool_program("pandoc", &overrides);
+    let xelatex = tool_program("xelatex", &overrides);
+    let mut cmd = Command::new(&pandoc);
     cmd.current_dir(work_dir)
         .arg(&temp_path)
         .args(["--from", "markdown+tex_math_dollars+raw_tex+yaml_metadata_block+fenced_divs"])
         .arg("--standalone");
     if format == "pdf" {
-        cmd.arg("--pdf-engine=xelatex");
+        cmd.arg(format!("--pdf-engine={xelatex}"));
     } else if format == "beamer" {
-        cmd.args(["-t", "beamer", "--pdf-engine=xelatex"]);
+        cmd.args(["-t", "beamer"]).arg(format!("--pdf-engine={xelatex}"));
     } else if format == "latex" || format == "tex" {
         cmd.args(["-t", "latex"]);
     }
     cmd.arg("-o").arg(&output_path);
     let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
-    let log = format!("$ pandoc {} -o {}\n{}{}", md_path.display(), output_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let log = format!("$ {} {} -o {}\n{}{}", pandoc, md_path.display(), output_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     Ok(LatexBuildResult {
         ok: output.status.success() && output_path.exists(),
-        command: format!("pandoc export {format}"),
+        command: format!("{} export {format}", pandoc),
         pdf_path: output_path.exists().then(|| output_path.to_string_lossy().to_string()),
         diagnostics: parse_pandoc_diagnostics(&log, &relative_path),
         log,
@@ -989,13 +1484,13 @@ fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, form
 }
 
 #[tauri::command]
-async fn export_markdown_pandoc(root_dir: String, relative_path: String, format: String) -> Result<LatexBuildResult, String> {
-    tauri::async_runtime::spawn_blocking(move || export_markdown_pandoc_blocking(root_dir, relative_path, format))
+async fn export_markdown_pandoc(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || export_markdown_pandoc_blocking(root_dir, relative_path, format, tool_paths))
         .await
         .map_err(|error| format!("Pandoc 导出后台任务失败：{error}"))?
 }
 
-fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
+fn build_latex_blocking(root_dir: String, relative_path: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
     let root = PathBuf::from(root_dir);
     let requested_tex_path = safe_join(&root, &relative_path)?;
     if !requested_tex_path.exists() {
@@ -1009,17 +1504,44 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
     let file_name = tex_path.file_name().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
     let stem = tex_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
     let engine = read_tex_program(&tex_path);
+    let overrides = tool_paths.unwrap_or_default();
+    let latexmk_program = tool_program("latexmk", &overrides);
+    let engine_program = if engine == "xelatex" { tool_program("xelatex", &overrides) } else { engine.to_string() };
     let latexmk_mode = latexmk_mode_arg(engine);
 
-    let mut latexmk = Command::new("latexmk");
-    latexmk.current_dir(work_dir).args([latexmk_mode, "-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
-    match latexmk.output() {
-        Ok(output) => {
-            let log = format!("$ latexmk {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}\n{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let run_latexmk = || -> Result<(bool, String), std::io::Error> {
+        let mut latexmk = Command::new(&latexmk_program);
+        latexmk.current_dir(work_dir).args([latexmk_mode, "-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
+        let output = latexmk.output()?;
+        Ok((
+            output.status.success(),
+            format!("$ {} {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}\n{}{}", latexmk_program, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)),
+        ))
+    };
+
+    match run_latexmk() {
+        Ok((success, mut log)) => {
             let pdf_path = tex_path.with_extension("pdf");
+            let mut final_success = success;
+            if !success && latexmk_previous_invocation_error(&log) {
+                match clean_latex_artifacts_for_tex(&tex_path) {
+                    Ok(removed) => log.push_str(&format!("\nScholia Studio: 检测到 latexmk 记录了上一次失败状态，已自动清理 {removed} 个辅助文件并重试。\n")),
+                    Err(error) => log.push_str(&format!("\nScholia Studio: 自动清理辅助文件失败：{error}\n")),
+                }
+                match run_latexmk() {
+                    Ok((retry_success, retry_log)) => {
+                        final_success = retry_success;
+                        log.push_str(&retry_log);
+                    }
+                    Err(error) => {
+                        final_success = false;
+                        log.push_str(&format!("\nScholia Studio: 清理后重试 latexmk 失败：{error}\n"));
+                    }
+                }
+            }
             return Ok(LatexBuildResult {
-                ok: output.status.success() && pdf_path.exists(),
-                command: format!("latexmk {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}"),
+                ok: final_success && pdf_path.exists(),
+                command: format!("{} {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}", latexmk_program),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
                 diagnostics: parse_latex_diagnostics(&log),
                 log,
@@ -1027,12 +1549,12 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
         }
         Err(_) => {
             // Fallback for machines that only have one TeX engine + bibtex/biber.
-            let mut combined = format!("latexmk 不可用，回退到 {engine}/bibtex/biber 多轮构建。\n");
+            let mut combined = format!("latexmk 不可用，回退到 {engine_program}/bibtex/biber 多轮构建。\n");
             let mut ok = true;
-            let first = run_latex_command(work_dir, engine, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
+            let first = run_latex_command(work_dir, &engine_program, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]);
             match first {
                 Ok((success, log)) => { ok &= success; combined.push_str(&log); }
-                Err(error) => return Err(format!("无法执行 latexmk 或 {engine}。请先安装 TeX Live/MiKTeX 并配置 PATH。原始错误：{error}")),
+                Err(error) => return Err(format!("无法执行 {latexmk_program} 或 {engine_program}。请先安装 TeX Live/MiKTeX 并配置 PATH，或在设置中手动填写路径。原始错误：{error}")),
             }
 
             let aux = work_dir.join(format!("{stem}.aux"));
@@ -1052,15 +1574,15 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
             }
 
             for _ in 0..2 {
-                match run_latex_command(work_dir, engine, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]) {
+                match run_latex_command(work_dir, &engine_program, &["-interaction=nonstopmode", "-synctex=1", "-file-line-error", file_name]) {
                     Ok((success, log)) => { ok &= success; combined.push_str(&log); }
-                    Err(error) => { ok = false; combined.push_str(&format!("{engine} 执行失败：{error}\n")); }
+                    Err(error) => { ok = false; combined.push_str(&format!("{engine_program} 执行失败：{error}\n")); }
                 }
             }
             let pdf_path = tex_path.with_extension("pdf");
             Ok(LatexBuildResult {
                 ok: ok && pdf_path.exists(),
-                command: format!("{engine} + {} + {engine} x2", if bcf.exists() { "biber" } else { "bibtex" }),
+                command: format!("{} + {} + {} x2", engine_program, if bcf.exists() { "biber" } else { "bibtex" }, engine_program),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
                 diagnostics: parse_latex_diagnostics(&combined),
                 log: combined,
@@ -1070,8 +1592,8 @@ fn build_latex_blocking(root_dir: String, relative_path: String) -> Result<Latex
 }
 
 #[tauri::command]
-async fn build_latex(root_dir: String, relative_path: String) -> Result<LatexBuildResult, String> {
-    tauri::async_runtime::spawn_blocking(move || build_latex_blocking(root_dir, relative_path))
+async fn build_latex(root_dir: String, relative_path: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || build_latex_blocking(root_dir, relative_path, tool_paths))
         .await
         .map_err(|error| format!("LaTeX 后台任务失败：{error}"))?
 }
@@ -1097,7 +1619,7 @@ fn relative_path_if_inside(root: &Path, path: &Path) -> Option<String> {
 }
 
 #[tauri::command]
-fn synctex_forward(root_dir: String, relative_path: String, line: u32, column: u32) -> Result<PdfSyncPoint, String> {
+fn synctex_forward(root_dir: String, relative_path: String, line: u32, column: u32, tool_paths: Option<ToolPathOverrides>) -> Result<PdfSyncPoint, String> {
     let root = PathBuf::from(root_dir);
     let requested_tex_path = safe_join(&root, &relative_path)?;
     if !requested_tex_path.exists() {
@@ -1110,7 +1632,8 @@ fn synctex_forward(root_dir: String, relative_path: String, line: u32, column: u
     }
     let input = format!("{}:{}:{}", line.max(1), column.max(1), requested_tex_path.to_string_lossy());
     let pdf_str = pdf_path.to_string_lossy().to_string();
-    let output = Command::new("synctex")
+    let synctex_program = tool_program("synctex", &tool_paths.unwrap_or_default());
+    let output = Command::new(&synctex_program)
         .args(["view", "-i", &input, "-o", &pdf_str])
         .output()
         .map_err(|error| format!("无法执行 synctex。请确认 TeX Live/MiKTeX 已安装并在 PATH 中：{error}"))?;
@@ -1134,7 +1657,7 @@ fn synctex_forward(root_dir: String, relative_path: String, line: u32, column: u
 }
 
 #[tauri::command]
-fn synctex_reverse(root_dir: String, pdf_path: String, page: u32, x: f64, y: f64) -> Result<TexSourcePoint, String> {
+fn synctex_reverse(root_dir: String, pdf_path: String, page: u32, x: f64, y: f64, tool_paths: Option<ToolPathOverrides>) -> Result<TexSourcePoint, String> {
     let root = PathBuf::from(root_dir);
     let pdf = PathBuf::from(pdf_path);
     if !pdf.exists() {
@@ -1142,7 +1665,8 @@ fn synctex_reverse(root_dir: String, pdf_path: String, page: u32, x: f64, y: f64
     }
     let pdf_str = pdf.to_string_lossy().to_string();
     let query = format!("{}:{}:{}:{}", page.max(1), x, y, pdf_str);
-    let output = Command::new("synctex")
+    let synctex_program = tool_program("synctex", &tool_paths.unwrap_or_default());
+    let output = Command::new(&synctex_program)
         .args(["edit", "-o", &query])
         .output()
         .map_err(|error| format!("无法执行 synctex。请确认 TeX Live/MiKTeX 已安装并在 PATH 中：{error}"))?;
@@ -1167,17 +1691,7 @@ fn clean_latex(root_dir: String, relative_path: String) -> Result<String, String
     let root = PathBuf::from(root_dir);
     let requested_tex_path = safe_join(&root, &relative_path)?;
     let tex_path = read_tex_root(&requested_tex_path);
-    let work_dir = tex_path.parent().ok_or_else(|| "无法获取 LaTeX 文件目录。".to_string())?;
-    let stem = tex_path.file_stem().and_then(|v| v.to_str()).ok_or_else(|| "LaTeX 文件名无效。".to_string())?;
-    let exts = ["aux", "bbl", "bcf", "blg", "fdb_latexmk", "fls", "log", "out", "run.xml", "synctex.gz", "toc"];
-    let mut removed = 0;
-    for ext in exts {
-        let path = work_dir.join(format!("{stem}.{ext}"));
-        if path.exists() {
-            fs::remove_file(&path).map_err(|error| format!("无法删除 {}：{error}", path.display()))?;
-            removed += 1;
-        }
-    }
+    let removed = clean_latex_artifacts_for_tex(&tex_path)?;
     Ok(format!("已清理 {removed} 个 LaTeX 生成文件。"))
 }
 
@@ -1221,12 +1735,14 @@ pub fn run() {
             current_system_username,
             pick_local_folder,
             pick_local_file,
+            create_sample_workspace,
             write_text_file,
             save_text_file_with_dialog,
             set_secret,
             get_secret,
             delete_secret,
             open_external_url,
+            check_environment,
             list_workspace_files,
             read_workspace_file,
             read_workspace_data_url,

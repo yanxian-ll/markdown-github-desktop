@@ -18,11 +18,12 @@ import WelcomeStart from './components/WelcomeStart.vue';
 import TemplateGallery from './components/TemplateGallery.vue';
 import ResearchFlowPanel from './components/ResearchFlowPanel.vue';
 import { useAppStore } from "./stores/appStore";
-import type { DocumentKind, FileNode, PaperAnnotationRect } from "./types/app";
+import type { DocumentKind, FileNode, PaperAnnotationRect, FirstRunMode } from "./types/app";
 import type { ResearchFlowActionId } from './config/workbench';
 
 const store = useAppStore();
 const {
+  documents,
   activeDocument,
   activeDocumentId,
   busy,
@@ -62,11 +63,29 @@ const {
   activeDocumentDiagnostics,
   activeWritingStatsLabel,
   hasWorkspace,
+  toolPaths,
+  environmentChecks,
+  layoutSettings,
+  recoveryWarning,
+  draftCount,
+  projectSettings,
+  exportProfiles,
+  researchFlowStatuses,
 } = storeToRefs(store);
 
 const activeText = computed({
   get: () => activeDocument.value?.text ?? "",
   set: (value: string) => store.updateActiveText(value),
+});
+
+const openDocumentTabs = computed(() => documents.value);
+const primaryDocument = computed(() => activeDocument.value);
+const primaryText = computed({
+  get: () => primaryDocument.value?.text ?? '',
+  set: (value: string) => {
+    const id = primaryDocument.value?.id;
+    if (id) store.updateDocumentText(id, value);
+  },
 });
 
 const editorPaneVisible = ref(true);
@@ -125,6 +144,7 @@ const previewExportMenuVisible = ref(false);
 const annotationPanelVisible = ref(false);
 const annotationPanelWidth = ref(300);
 const editorSidePanelWidth = ref(280);
+const editorFontSize = ref(14);
 const editorOutlineVisible = ref(false);
 const sideWorkPanel = ref<'workflow' | 'outline' | 'bib' | 'snippets' | 'history' | null>(null);
 const bottomPanelVisible = ref(false);
@@ -192,6 +212,65 @@ const previewHeaderTitle = computed(() => {
 
 let imageGestureBaseZoom = 1;
 let persistTimer: number | undefined;
+let layoutPersistTimer: number | undefined;
+let applyingPersistedLayout = false;
+
+watch(
+  layoutSettings,
+  (layout) => {
+    applyingPersistedLayout = true;
+    explorerWidth.value = layout.explorerWidth;
+    templatePanelWidth.value = layout.templatePanelWidth;
+    settingsWidth.value = layout.settingsWidth;
+    previewWidth.value = layout.previewWidth;
+    annotationPanelWidth.value = layout.annotationPanelWidth;
+    bottomPanelHeight.value = layout.bottomPanelHeight;
+    editorFontSize.value = clamp(layout.editorFontSize || 14, 11, 28);
+    if (sideWorkPanel.value) {
+      editorSidePanelWidth.value = layout.editorSidePanelWidths[sideWorkPanel.value] || editorSidePanelWidth.value;
+    }
+    window.setTimeout(() => { applyingPersistedLayout = false; }, 0);
+  },
+  { immediate: true, deep: true },
+);
+
+watch(
+  () => sideWorkPanel.value,
+  (panel) => {
+    if (!panel) return;
+    editorSidePanelWidth.value = layoutSettings.value.editorSidePanelWidths[panel] || editorSidePanelWidth.value;
+  },
+);
+
+watch(
+  () => [explorerWidth.value, templatePanelWidth.value, settingsWidth.value, previewWidth.value, annotationPanelWidth.value, bottomPanelHeight.value, editorFontSize.value],
+  () => {
+    if (applyingPersistedLayout) return;
+    window.clearTimeout(layoutPersistTimer);
+    layoutPersistTimer = window.setTimeout(() => {
+      store.setLayoutSettings({
+        explorerWidth: explorerWidth.value,
+        templatePanelWidth: templatePanelWidth.value,
+        settingsWidth: settingsWidth.value,
+        previewWidth: previewWidth.value,
+        annotationPanelWidth: annotationPanelWidth.value,
+        bottomPanelHeight: bottomPanelHeight.value,
+        editorFontSize: editorFontSize.value,
+      });
+    }, 500);
+  },
+);
+
+watch(
+  () => editorSidePanelWidth.value,
+  (width) => {
+    if (applyingPersistedLayout || !sideWorkPanel.value) return;
+    window.clearTimeout(layoutPersistTimer);
+    layoutPersistTimer = window.setTimeout(() => {
+      if (sideWorkPanel.value) store.setEditorSidePanelWidth(sideWorkPanel.value, width);
+    }, 500);
+  },
+);
 watch(
   () => [
     darkMode.value,
@@ -217,10 +296,7 @@ watch(
     annotationPanelVisible.value = false;
     editorOutlineVisible.value = false;
     editorPaneVisible.value = true;
-    if (["markdown", "latex"].includes(activeDocument.value?.kind || "")) {
-      previewVisible.value = true;
-    }
-    if (sideWorkPanel.value !== 'workflow') sideWorkPanel.value = null;
+    if (sideWorkPanel.value === 'outline' && !editorOutlineAvailable.value) sideWorkPanel.value = null;
   },
 );
 
@@ -309,8 +385,22 @@ function onResizeMove(event: MouseEvent) {
 }
 
 function stopResize() {
+  const finishedTarget = resizeTarget;
   resizeTarget = null;
   document.body.classList.remove("drag-resizing", "drag-resizing-x", "drag-resizing-y");
+  if (finishedTarget === "editorSide" && sideWorkPanel.value) {
+    store.setEditorSidePanelWidth(sideWorkPanel.value, editorSidePanelWidth.value);
+  } else if (finishedTarget) {
+    store.setLayoutSettings({
+      explorerWidth: explorerWidth.value,
+      templatePanelWidth: templatePanelWidth.value,
+      settingsWidth: settingsWidth.value,
+      previewWidth: previewWidth.value,
+      annotationPanelWidth: annotationPanelWidth.value,
+      bottomPanelHeight: bottomPanelHeight.value,
+      editorFontSize: editorFontSize.value,
+    });
+  }
 }
 
 function zoomImage(delta: number) {
@@ -343,6 +433,36 @@ function onImageGestureChange(event: Event) {
     0.2,
     3,
   );
+}
+
+function setEditorFontSize(value: number) {
+  editorFontSize.value = clamp(Math.round(value), 11, 28);
+}
+
+function eventTargetsEditor(event: Event) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('.editor-code-pane, .cm-editor')) return true;
+  const active = document.activeElement as HTMLElement | null;
+  return !!active?.closest('.editor-code-pane, .cm-editor');
+}
+
+function onEditorWheelZoom(event: WheelEvent) {
+  if (!(event.ctrlKey || event.metaKey) || !eventTargetsEditor(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setEditorFontSize(editorFontSize.value + (event.deltaY > 0 ? -1 : 1));
+}
+
+function activateDocumentTab(id: string) {
+  store.setActiveDocument(id);
+}
+
+async function closeDocumentTab(id: string) {
+  await store.closeDocument(id);
+}
+
+function focusEditorDocument(id?: string) {
+  if (id && activeDocumentId.value !== id) store.setActiveDocument(id);
 }
 
 async function saveLocal() {
@@ -527,6 +647,23 @@ async function createScratchDocument(kind: DocumentKind = 'markdown') {
   scratchEditorVisible.value = true;
 }
 
+async function startGuidedWorkflow(mode: FirstRunMode) {
+  try {
+    await store.startGuidedWorkflow(mode);
+    if (!workspace.value?.localDir) scratchEditorVisible.value = true;
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function openSampleWorkspace() {
+  try {
+    await store.openSampleWorkspace();
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function createDailyNote() {
   try {
     await store.createDailyNote();
@@ -558,6 +695,23 @@ async function handleLatexNavigate(payload: { kind: 'label' | 'bib' | 'file'; ke
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && eventTargetsEditor(event)) {
+    if (["=", "+"].includes(event.key)) {
+      event.preventDefault();
+      setEditorFontSize(editorFontSize.value + 1);
+      return;
+    }
+    if (event.key === "-") {
+      event.preventDefault();
+      setEditorFontSize(editorFontSize.value - 1);
+      return;
+    }
+    if (event.key === "0") {
+      event.preventDefault();
+      setEditorFontSize(14);
+      return;
+    }
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
     saveLocal();
@@ -584,10 +738,15 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
+async function markCleanShutdown() {
+  await store.persistCleanShutdown();
+}
+
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("mousemove", onResizeMove);
   window.addEventListener("mouseup", stopResize);
+  window.addEventListener("beforeunload", markCleanShutdown);
   await store.initialize();
 });
 
@@ -595,6 +754,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("mousemove", onResizeMove);
   window.removeEventListener("mouseup", stopResize);
+  window.removeEventListener("beforeunload", markCleanShutdown);
+  void store.persistCleanShutdown();
 });
 </script>
 
@@ -608,10 +769,13 @@ onBeforeUnmount(() => {
       :template-panel-visible="templatePanelVisible"
       :git-dirty-count="gitDirtyCount"
       :github-workspace="workspace?.source !== 'local' && !!workspace?.localDir"
+      :preview-available="previewCapable && !previewOnlyDocument"
+      :preview-visible="effectivePreviewVisible"
       @submit-github="submitGithub"
       @toggle-explorer="explorerVisible = !explorerVisible"
       @toggle-git-panel="gitPanelVisible = !gitPanelVisible"
       @open-templates="templatePanelVisible = !templatePanelVisible"
+      @toggle-preview="togglePreviewPane"
     />
 
     <main class="workspace" :style="workspaceStyle">
@@ -664,6 +828,8 @@ onBeforeUnmount(() => {
         :busy="busy || workspaceBusy"
         @open-local="store.openLocalEntry"
         @new-scratch="createScratchDocument"
+        @quick-start="startGuidedWorkflow"
+        @open-sample="openSampleWorkspace"
       />
 
       <section
@@ -673,6 +839,21 @@ onBeforeUnmount(() => {
         :style="editorLayoutStyle"
       >
         <div v-if="effectiveEditorVisible" class="editor-column">
+          <div class="document-tabs-bar">
+            <div
+              v-for="doc in openDocumentTabs"
+              :key="doc.id"
+              class="document-tab"
+              :class="{ active: activeDocumentId === doc.id, dirty: doc.dirty }"
+              :title="`${doc.relativePath || doc.title}${doc.dirty ? ' · 未保存' : ''}`"
+              @click="activateDocumentTab(doc.id)"
+            >
+              <span class="document-tab-kind">{{ doc.kind === 'latex' ? 'TEX' : doc.kind === 'markdown' ? 'MD' : doc.kind === 'bibtex' ? 'BIB' : doc.kind.toUpperCase() }}</span>
+              <span class="document-tab-title">{{ doc.relativePath || doc.title }}</span>
+              <span v-if="doc.dirty" class="document-tab-dot">●</span>
+              <button class="document-tab-close" title="关闭文件" @click.stop="closeDocumentTab(doc.id)">×</button>
+            </div>
+          </div>
           <div class="editor-header pane-header" :title="editorHeaderTitle" @dblclick="onEditorHeaderDblclick">
             <div class="editor-header-left">
               <div class="editor-sidebar-buttons" aria-label="编辑侧栏">
@@ -735,8 +916,10 @@ onBeforeUnmount(() => {
                 :writing-stats-label="activeWritingStatsLabel"
                 :latex-index="latexIndex"
                 :annotations="annotations"
+                :flow-statuses="researchFlowStatuses"
                 :busy="busy"
                 @action="runResearchFlowAction"
+                @open-latest="store.openResearchFlowEntry"
                 @close="sideWorkPanel = null"
               />
               <EditorOutlinePanel
@@ -747,7 +930,15 @@ onBeforeUnmount(() => {
                 @open="store.openLatexOutlineItem"
                 @close="sideWorkPanel = null"
               />
-              <BibManagerPanel v-else-if="sideWorkPanel === 'bib'" :entries="latexIndex.citations" @open="store.jumpToBibEntry" @close="sideWorkPanel = null" />
+              <BibManagerPanel
+                v-else-if="sideWorkPanel === 'bib'"
+                :entries="latexIndex.citations"
+                @open="store.jumpToBibEntry"
+                @create="store.createBibEntry"
+                @edit="store.updateBibEntryRaw"
+                @remove="store.removeBibEntry"
+                @close="sideWorkPanel = null"
+              />
               <SnippetPanel v-else-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
               <HistoryPanel v-else-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
             </div>
@@ -757,29 +948,34 @@ onBeforeUnmount(() => {
               title="拖动调整编辑侧栏宽度"
               @mousedown="startResize('editorSide', $event)"
             />
-            <div class="editor-code-pane">
-              <MarkdownEditor
-                v-model="activeText"
-                :dark-mode="darkMode"
-                :kind="activeDocument?.kind"
-                :goto-line="editorGotoLine"
-                :latex-index="latexIndex"
-                :diagnostics="activeDocumentDiagnostics"
-                :root-dir="workspace?.localDir"
-                :current-path="activeDocument?.relativePath"
-                @save="saveLocal"
-                @build="buildLatex"
-                @source-dblclick="syncTexForward"
-                @markdown-source-click="syncMarkdownPreview"
-                @latex-navigate="handleLatexNavigate"
-                @bib-preview="store.setActiveBibPreviewKey"
-                @cursor-line="store.setEditorCursorLine"
-              />
-              <BibPreviewPopover
-                :entry="activeBibPreview"
-                @open="store.jumpToBibEntry"
-                @close="store.setActiveBibPreviewKey(undefined)"
-              />
+            <div class="editor-stack">
+              <div class="editor-code-pane editor-group" @mousedown="focusEditorDocument(primaryDocument?.id)" @wheel.capture="onEditorWheelZoom">
+                <MarkdownEditor
+                  :key="primaryDocument?.id || 'empty-editor'"
+                  v-model="primaryText"
+                  :dark-mode="darkMode"
+                  :kind="primaryDocument?.kind"
+                  :goto-line="activeDocumentId === primaryDocument?.id ? editorGotoLine : null"
+                  :latex-index="latexIndex"
+                  :diagnostics="activeDocumentId === primaryDocument?.id ? activeDocumentDiagnostics : []"
+                  :root-dir="workspace?.localDir"
+                  :current-path="primaryDocument?.relativePath"
+                  :font-size="editorFontSize"
+                  @save="saveLocal"
+                  @build="buildLatex"
+                  @source-dblclick="syncTexForward"
+                  @markdown-source-click="syncMarkdownPreview"
+                  @latex-navigate="handleLatexNavigate"
+                  @bib-preview="store.setActiveBibPreviewKey"
+                  @cursor-line="store.setEditorCursorLine"
+                />
+                <BibPreviewPopover
+                  v-if="sideWorkPanel !== 'bib' && activeDocumentId === primaryDocument?.id"
+                  :entry="activeBibPreview"
+                  @open="store.jumpToBibEntry"
+                  @close="store.setActiveBibPreviewKey(undefined)"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -877,7 +1073,9 @@ onBeforeUnmount(() => {
               @status="store.updateAnnotationStatus"
               @reply="store.addAnnotationReply"
               @edit-message="store.updateAnnotationMessage"
+              @export="store.exportAnnotations"
               @export-markdown="store.exportAnnotationsMarkdown"
+              @task="store.convertAnnotationToTask"
               @remove="store.removeAnnotation"
               @close="annotationPanelVisible = false"
             />
@@ -924,7 +1122,9 @@ onBeforeUnmount(() => {
               @status="store.updateAnnotationStatus"
               @reply="store.addAnnotationReply"
               @edit-message="store.updateAnnotationMessage"
+              @export="store.exportAnnotations"
               @export-markdown="store.exportAnnotationsMarkdown"
+              @task="store.convertAnnotationToTask"
               @remove="store.removeAnnotation"
               @close="annotationPanelVisible = false"
             />
@@ -1007,7 +1207,9 @@ onBeforeUnmount(() => {
               @status="store.updateAnnotationStatus"
               @reply="store.addAnnotationReply"
               @edit-message="store.updateAnnotationMessage"
+              @export="store.exportAnnotations"
               @export-markdown="store.exportAnnotationsMarkdown"
+              @task="store.convertAnnotationToTask"
               @remove="store.removeAnnotation"
               @close="annotationPanelVisible = false"
             />
@@ -1048,7 +1250,9 @@ onBeforeUnmount(() => {
               @status="store.updateAnnotationStatus"
               @reply="store.addAnnotationReply"
               @edit-message="store.updateAnnotationMessage"
+              @export="store.exportAnnotations"
               @export-markdown="store.exportAnnotationsMarkdown"
+              @task="store.convertAnnotationToTask"
               @remove="store.removeAnnotation"
               @close="annotationPanelVisible = false"
             />
@@ -1099,6 +1303,12 @@ onBeforeUnmount(() => {
         :latex-result="latexResult"
         :pdf-render-quality="pdfRenderQuality"
         :markdown-render-preset="markdownRenderPreset"
+        :tool-paths="toolPaths"
+        :environment-checks="environmentChecks"
+        :recovery-warning="recoveryWarning"
+        :draft-count="draftCount"
+        :project-settings="projectSettings"
+        :export-profiles="exportProfiles"
         @set-token="store.setGithubToken"
         @forget-token="store.forgetGithubToken"
         @clone="store.cloneWorkspace"
@@ -1110,6 +1320,11 @@ onBeforeUnmount(() => {
         @open-pdf="store.openCurrentPdf"
         @update-pdf-render-quality="store.setPdfRenderQuality"
         @update-markdown-render-preset="store.setMarkdownRenderPreset"
+        @set-tool-path="store.setToolPath"
+        @check-environment="store.runEnvironmentCheck"
+        @create-snapshot="store.createLocalSnapshot"
+        @export-debug="store.exportDebugBundle"
+        @update-project-setting="store.setProjectSetting"
         @hide="gitPanelVisible = false"
       />
     </main>

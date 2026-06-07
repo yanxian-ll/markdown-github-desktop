@@ -21,7 +21,8 @@ interface OutlineTreeNode {
 }
 
 const collapsedIds = ref(new Set<string>());
-const userToggled = ref(false);
+const outlineQuery = ref('');
+const maxLevel = ref<number | 'all'>('all');
 
 function normalize(path?: string) {
   return (path || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -32,7 +33,33 @@ function isOutlineCapable(kind?: string) {
 }
 
 const activePath = computed(() => normalize(props.active?.relativePath));
-const activeOutline = computed(() => {
+const storageKey = computed(() => `scholia:outline:${activePath.value || 'scratch'}`);
+
+function loadOutlineState() {
+  try {
+    const raw = localStorage.getItem(storageKey.value);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { collapsedIds?: string[]; query?: string; maxLevel?: number | 'all' };
+    collapsedIds.value = new Set(parsed.collapsedIds || []);
+    outlineQuery.value = parsed.query || '';
+    maxLevel.value = parsed.maxLevel || 'all';
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function saveOutlineState() {
+  try {
+    localStorage.setItem(storageKey.value, JSON.stringify({
+      collapsedIds: Array.from(collapsedIds.value),
+      query: outlineQuery.value,
+      maxLevel: maxLevel.value,
+    }));
+  } catch {}
+}
+
+const rawActiveOutline = computed(() => {
   if (!isOutlineCapable(props.active?.kind) || !activePath.value) return [];
   return (props.outline || [])
     .filter((item) => {
@@ -43,19 +70,28 @@ const activeOutline = computed(() => {
     .sort((a, b) => a.line - b.line);
 });
 
+function itemLevel(item: LatexOutlineItem) {
+  return item.displayLevel ?? item.level ?? 0;
+}
+
+const activeOutline = computed(() => {
+  const keyword = outlineQuery.value.trim().toLowerCase();
+  return rawActiveOutline.value.filter((item) => {
+    if (maxLevel.value !== 'all' && itemLevel(item) > Number(maxLevel.value)) return false;
+    if (!keyword) return true;
+    return `${item.title} ${item.kind} ${item.file}`.toLowerCase().includes(keyword);
+  });
+});
+
 const activeOutlineId = computed(() => {
   const line = props.activeLine || 1;
   let active: LatexOutlineItem | undefined;
-  for (const item of activeOutline.value) {
+  for (const item of rawActiveOutline.value) {
     if (item.line <= line) active = item;
     else break;
   }
   return active?.id;
 });
-
-function itemLevel(item: LatexOutlineItem) {
-  return item.displayLevel ?? item.level ?? 0;
-}
 
 const outlineTree = computed<OutlineTreeNode[]>(() => {
   const roots: OutlineTreeNode[] = [];
@@ -84,16 +120,16 @@ function collectCollapsibleIds(nodes: OutlineTreeNode[], result = new Set<string
 }
 
 watch(
-  () => [activePath.value, activeOutline.value.map((item) => item.id).join('|')],
+  () => [activePath.value, rawActiveOutline.value.map((item) => item.id).join('|')],
   () => {
-    userToggled.value = false;
-    collapsedIds.value = collectCollapsibleIds(outlineTree.value);
+    if (!loadOutlineState()) collapsedIds.value = collectCollapsibleIds(outlineTree.value);
   },
   { immediate: true },
 );
 
+watch([collapsedIds, outlineQuery, maxLevel], saveOutlineState, { deep: true });
+
 function toggle(item: LatexOutlineItem) {
-  userToggled.value = true;
   const next = new Set(collapsedIds.value);
   if (next.has(item.id)) next.delete(item.id);
   else next.add(item.id);
@@ -128,14 +164,20 @@ const OutlineNode: any = defineComponent({
     return (): any => {
       const hasChildren = componentProps.node.children.length > 0;
       const collapsed = componentProps.collapsedIds.has(componentProps.node.item.id);
+      const active = componentProps.activeId === componentProps.node.item.id;
       return h('li', { class: 'editor-outline-node' }, [
         h('div', {
-          class: {
-            'editor-outline-row': true,
-            active: componentProps.activeId === componentProps.node.item.id,
-          },
+          class: { 'editor-outline-row': true, active },
           style: { paddingLeft: `${8 + componentProps.depth * 14}px` },
           title: `${componentProps.node.item.file}:${componentProps.node.item.line}`,
+          onVnodeMounted: (vnode: any) => {
+            const el = vnode?.el;
+            if (active && el instanceof HTMLElement) window.setTimeout(() => el.scrollIntoView({ block: 'center' }), 0);
+          },
+          onVnodeUpdated: (vnode: any) => {
+            const el = vnode?.el;
+            if (active && el instanceof HTMLElement) window.setTimeout(() => el.scrollIntoView({ block: 'center' }), 0);
+          },
           onClick: () => componentEmit('open', componentProps.node.item),
         }, [
           h('button', {
@@ -167,6 +209,9 @@ const OutlineNode: any = defineComponent({
   },
 });
 
+function expandAll() { collapsedIds.value = new Set(); }
+function collapseAll() { collapsedIds.value = collectCollapsibleIds(outlineTree.value); }
+
 function isInteractiveHeaderTarget(event: MouseEvent) {
   const target = event.target as HTMLElement | null;
   return !!target?.closest('button, input, textarea, select, a, [role="button"]');
@@ -188,11 +233,26 @@ function onHeaderDblclick(event: MouseEvent) {
       <button class="toolbar-icon" title="隐藏大纲" @click="emit('close')">×</button>
     </header>
 
+    <div class="editor-outline-tools">
+      <input v-model="outlineQuery" type="search" placeholder="搜索章节 / label / 文件…" />
+      <select v-model="maxLevel" title="过滤层级">
+        <option value="all">全部层级</option>
+        <option :value="1">一级</option>
+        <option :value="2">二级以内</option>
+        <option :value="3">三级以内</option>
+      </select>
+      <button title="全部展开" @click="expandAll">展开</button>
+      <button title="全部折叠" @click="collapseAll">折叠</button>
+    </div>
+
     <div v-if="!isOutlineCapable(active?.kind)" class="empty-state compact">
       仅 TeX 和 Markdown 文档显示大纲。
     </div>
-    <div v-else-if="!activeOutline.length" class="empty-state compact">
+    <div v-else-if="!rawActiveOutline.length" class="empty-state compact">
       当前文件没有识别到章节。TeX 支持 \section、\subsection；Markdown 支持 #、## 标题。
+    </div>
+    <div v-else-if="!activeOutline.length" class="empty-state compact">
+      没有匹配当前筛选条件的章节。
     </div>
     <ul v-else class="editor-outline-tree">
       <OutlineNode

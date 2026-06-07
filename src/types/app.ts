@@ -62,6 +62,114 @@ export interface LatexBuildResult {
   diagnostics: LatexDiagnostic[];
 }
 
+export type EnvironmentToolId = "pandoc" | "xelatex" | "latexmk" | "synctex" | "git";
+
+export interface EnvironmentToolCheck {
+  id: EnvironmentToolId;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  command: string;
+  version?: string;
+  error?: string;
+  installHint: string;
+}
+
+export interface ToolPathSettings {
+  pandoc?: string;
+  xelatex?: string;
+  latexmk?: string;
+  synctex?: string;
+  git?: string;
+}
+
+export type FirstRunMode = "paper" | "notes" | "review" | "weekly";
+export type BuildCommandPreference = "auto" | "latexmk" | "xelatex" | "pdflatex" | "lualatex";
+
+export interface PrivacySettings {
+  /** 是否允许把较大的预览文本写入 appState；默认 false。 */
+  persistLargePreviews?: boolean;
+  /** 单个草稿文档允许写入 appState 的最大字符数。 */
+  maxPersistedTextChars?: number;
+}
+
+export interface ProjectSettings {
+  projectType?: "paper" | "notes" | "review" | "mixed" | "plain";
+  firstRunMode?: FirstRunMode;
+  mainTexFile?: string;
+  mainMarkdownFile?: string;
+  exportProfile?: string;
+  pandocProfileId?: string;
+  buildCommand?: BuildCommandPreference;
+  pdfRenderQuality?: number;
+  authorName?: string;
+  privacy?: PrivacySettings;
+  toolPaths?: ToolPathSettings;
+  researchFlowPaths?: {
+    dailyDir?: string;
+    weeklyDir?: string;
+    evidenceIndex?: string;
+    paperOutline?: string;
+    reviewSummary?: string;
+  };
+}
+
+export interface ExportProfile {
+  id: string;
+  name: string;
+  format: "pdf" | "docx" | "html" | "epub" | "latex" | "beamer";
+  args: string[];
+  outputDir?: string;
+  description?: string;
+  lastUsedAt?: string;
+}
+
+export interface ResearchFlowStepStatus {
+  id: "daily" | "weekly" | "evidence" | "outline" | "review";
+  label: string;
+  state: "done" | "ready" | "missing" | "blocked";
+  path?: string;
+  updatedAt?: string;
+  detail: string;
+  missing: string[];
+}
+
+export type AnnotationExportFormat = "markdown" | "jsonl" | "csv" | "latex-todonotes";
+
+export type BibEntryType = "article" | "inproceedings" | "book" | "phdthesis" | "mastersthesis" | "misc";
+
+export interface BibEntryPayload {
+  type: BibEntryType | string;
+  key: string;
+  title: string;
+  author: string;
+  year: string;
+  journal?: string;
+  booktitle?: string;
+  publisher?: string;
+  doi?: string;
+  url?: string;
+  note?: string;
+}
+
+export interface LayoutSettings {
+  explorerWidth: number;
+  templatePanelWidth: number;
+  settingsWidth: number;
+  previewWidth: number;
+  annotationPanelWidth: number;
+  bottomPanelHeight: number;
+  /** 编辑器字体大小，支持 Ctrl/Cmd + 鼠标滚轮缩放。 */
+  editorFontSize: number;
+  editorSidePanelWidths: Partial<Record<"workflow" | "outline" | "bib" | "snippets" | "history", number>>;
+}
+
+export interface RecoveryState {
+  shutdownClean: boolean;
+  lastStartedAt?: number;
+  lastClosedAt?: number;
+}
+
 export interface PdfSyncPoint {
   page: number;
   // PDF-space coordinates returned by SyncTeX.  These are in the
@@ -156,6 +264,12 @@ export interface PaperAnnotationMessage {
   updatedAt?: string;
 }
 
+export interface PaperAnnotationTaskMarker {
+  file: string;
+  line: number;
+  marker: string;
+}
+
 export interface PaperAnnotation {
   id: string;
   type: PaperAnnotationType;
@@ -187,6 +301,11 @@ export interface PaperAnnotation {
   anchorConfidence?: PaperAnnotationAnchorConfidence;
   needsReview?: boolean;
   needsReviewReason?: string;
+  taskMarker?: PaperAnnotationTaskMarker;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolvedRevision?: string;
+  resolutionNote?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -208,6 +327,11 @@ export interface PaperReviewItem {
   anchor_confidence?: PaperAnnotationAnchorConfidence;
   needs_review?: boolean;
   needs_review_reason?: string;
+  task_marker?: PaperAnnotationTaskMarker;
+  resolved_at?: string;
+  resolved_by?: string;
+  resolved_revision?: string;
+  resolution_note?: string;
   created_at: string;
   updated_at: string;
 }
@@ -231,5 +355,10 @@ export interface PersistedAppState {
     pdfPanelVisible: boolean;
     pdfRenderQuality?: number;
     markdownRenderPreset?: MarkdownRenderPreset;
+    toolPaths?: ToolPathSettings;
   };
+  layout?: Partial<LayoutSettings>;
+  projectSettings?: ProjectSettings;
+  exportProfiles?: ExportProfile[];
+  recovery?: RecoveryState;
 }
