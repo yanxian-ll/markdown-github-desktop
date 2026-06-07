@@ -1,0 +1,20 @@
+{
+  "projectType": "plain",
+  "exportProfile": "pdf",
+  "pandocProfileId": "pdf",
+  "buildCommand": "auto",
+  "pdfRenderQuality": 0.95,
+  "privacy": {
+    "persistLargePreviews": false,
+    "maxPersistedTextChars": 500000
+  },
+  "researchFlowPaths": {
+    "dailyDir": "notes/daily",
+    "weeklyDir": "notes/weekly",
+    "evidenceIndex": "research/evidence-index.md",
+    "paperOutline": "paper/paper-outline.md",
+    "reviewSummary": ".paper-notes/review-summary.md"
+  },
+  "mainMarkdownFile": "README.md",
+  "mainTexFile": "isprs-archives-annals-full-paper/main.tex"
+}

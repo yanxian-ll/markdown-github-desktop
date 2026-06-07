@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { sampleLatex, sampleMarkdown } from "../services/markdown";
+import isprsCls from "../templates/vendor/isprs/isprs.cls?raw";
+import isprsBst from "../templates/vendor/isprs/isprs.bst?raw";
 import { makeId } from "../services/hash";
 import {
   buildLatex as buildLatexFile,
@@ -2565,6 +2567,48 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
     pdfSyncPoint.value = null;
   }
 
+
+  async function workspaceFileExists(relativePath: string): Promise<boolean> {
+    if (!workspace.value?.localDir) return false;
+    try {
+      await readWorkspaceFile(workspace.value.localDir, relativePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function ensureLatexTemplateVendorFiles(texRelativePath: string): Promise<number> {
+    if (!workspace.value?.localDir) return 0;
+    let tex = "";
+    try {
+      tex = await readWorkspaceFile(workspace.value.localDir, texRelativePath);
+    } catch {
+      return 0;
+    }
+    const lower = tex.toLowerCase();
+    const usesIsprsClass = /\\documentclass(?:\[[^\]]*\])?\{isprs\}/i.test(tex);
+    if (!usesIsprsClass && !lower.includes("\\bibliographystyle{isprs}")) {
+      return 0;
+    }
+    const dir = parentPathOf(texRelativePath);
+    const clsPath = dir ? `${dir}/isprs.cls` : "isprs.cls";
+    const bstPath = dir ? `${dir}/isprs.bst` : "isprs.bst";
+    let added = 0;
+    if (!(await workspaceFileExists(clsPath))) {
+      await writeWorkspaceFile(workspace.value.localDir, clsPath, isprsCls.endsWith("\n") ? isprsCls : `${isprsCls}\n`);
+      added += 1;
+    }
+    if (!(await workspaceFileExists(bstPath))) {
+      await writeWorkspaceFile(workspace.value.localDir, bstPath, isprsBst.endsWith("\n") ? isprsBst : `${isprsBst}\n`);
+      added += 1;
+    }
+    if (added > 0) {
+      status.value = `已为 ISPRS 模板补齐 ${added} 个 vendor 文件。`;
+    }
+    return added;
+  }
+
   async function buildLatex() {
     return runExclusive("latex-build", "LaTeX 构建", async () => {
       const doc = activeDocument.value;
@@ -2581,8 +2625,12 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
       try {
         const buildForDocumentId = doc.id;
         status.value =
-          "LaTeX 正在后台构建 PDF，设置/隐藏/切换文件等界面操作不会被锁住…";
-        const targetPath = projectSettings.value.mainTexFile || doc.relativePath;
+          "LaTeX 正在后台构建当前打开的 TeX 文件，设置/隐藏/切换文件等界面操作不会被锁住…";
+        const targetPath = doc.relativePath;
+        const repairedVendorFiles = await ensureLatexTemplateVendorFiles(targetPath);
+        if (repairedVendorFiles > 0) {
+          await refreshWorkspace();
+        }
         const result = await buildLatexFile(
           workspace.value.localDir,
           targetPath,

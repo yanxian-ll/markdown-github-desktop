@@ -1,0 +1,49 @@
+[
+  {
+    "args": [
+      "--pdf-engine=xelatex"
+    ],
+    "format": "pdf",
+    "id": "pdf",
+    "name": "PDF"
+  },
+  {
+    "args": [],
+    "format": "docx",
+    "id": "docx",
+    "name": "Word DOCX"
+  },
+  {
+    "args": [
+      "--standalone"
+    ],
+    "format": "html",
+    "id": "html",
+    "name": "HTML"
+  },
+  {
+    "args": [],
+    "format": "epub",
+    "id": "epub",
+    "name": "EPUB"
+  },
+  {
+    "args": [
+      "-t",
+      "latex"
+    ],
+    "format": "latex",
+    "id": "latex",
+    "name": "LaTeX"
+  },
+  {
+    "args": [
+      "-t",
+      "beamer",
+      "--pdf-engine=xelatex"
+    ],
+    "format": "beamer",
+    "id": "beamer",
+    "name": "Beamer PDF"
+  }
+]

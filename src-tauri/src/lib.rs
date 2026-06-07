@@ -976,7 +976,41 @@ fn commit_and_push(root_dir: String, branch: String, message: String, token: Opt
     Ok(format!("{commit_out}\n{push_out}"))
 }
 
-fn parse_latex_diagnostics(log: &str) -> Vec<LatexDiagnostic> {
+fn normalize_latex_log_path_for_display(root: &Path, work_dir: &Path, raw: &str) -> String {
+    let mut cleaned = raw
+        .trim()
+        .trim_matches(|c| c == '(' || c == ')' || c == '\'' || c == '"')
+        .replace('\\', "/");
+    while let Some(rest) = cleaned.strip_prefix("./") {
+        cleaned = rest.to_string();
+    }
+    if cleaned.is_empty() {
+        return cleaned;
+    }
+    let raw_path = Path::new(&cleaned);
+    let candidate = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        work_dir.join(raw_path)
+    };
+    if let Ok(relative) = candidate.strip_prefix(root) {
+        let display = relative.to_string_lossy().replace('\\', "/");
+        return display.trim_start_matches("./").to_string();
+    }
+    cleaned.trim_start_matches("./").to_string()
+}
+
+fn extract_latex_file_token(trimmed: &str, suffix: &str) -> Option<String> {
+    let idx = trimmed.find(suffix)?;
+    let end = idx + suffix.len();
+    let start = trimmed[..idx]
+        .rfind(|c: char| c == ' ' || c == '(' || c == ')' || c == '\'' || c == '"')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    Some(trimmed[start..end].trim_matches('(').to_string())
+}
+
+fn parse_latex_diagnostics(log: &str, root: &Path, work_dir: &Path) -> Vec<LatexDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut current_file: Option<String> = None;
     let mut pending_error: Option<(String, Option<String>, Option<u32>)> = None;
@@ -987,12 +1021,8 @@ fn parse_latex_diagnostics(log: &str) -> Vec<LatexDiagnostic> {
             continue;
         }
 
-        if let Some(idx) = trimmed.find(".tex") {
-            let start = trimmed[..idx]
-                .rfind(|c| c == ' ' || c == '(' || c == '/' || c == '\\')
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            current_file = Some(trimmed[start..idx + 4].trim_matches('(').to_string());
+        if let Some(file_token) = extract_latex_file_token(trimmed, ".tex") {
+            current_file = Some(normalize_latex_log_path_for_display(root, work_dir, &file_token));
         }
 
         // -file-line-error commonly emits: path/file.tex:12: message
@@ -1008,7 +1038,7 @@ fn parse_latex_diagnostics(log: &str) -> Vec<LatexDiagnostic> {
                 diagnostics.push(LatexDiagnostic {
                     level: if message.to_ascii_lowercase().contains("warning") { "warning" } else { "error" }.into(),
                     message: if message.is_empty() { trimmed.to_string() } else { message },
-                    file: Some(trimmed[..file_end].to_string()),
+                    file: Some(normalize_latex_log_path_for_display(root, work_dir, &trimmed[..file_end])),
                     line: Some(line_no),
                 });
                 continue;
@@ -1543,7 +1573,7 @@ fn build_latex_blocking(root_dir: String, relative_path: String, tool_paths: Opt
                 ok: final_success && pdf_path.exists(),
                 command: format!("{} {latexmk_mode} -interaction=nonstopmode -synctex=1 -file-line-error {file_name}", latexmk_program),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
-                diagnostics: parse_latex_diagnostics(&log),
+                diagnostics: parse_latex_diagnostics(&log, &root, work_dir),
                 log,
             });
         }
@@ -1584,7 +1614,7 @@ fn build_latex_blocking(root_dir: String, relative_path: String, tool_paths: Opt
                 ok: ok && pdf_path.exists(),
                 command: format!("{} + {} + {} x2", engine_program, if bcf.exists() { "biber" } else { "bibtex" }, engine_program),
                 pdf_path: pdf_path.exists().then(|| pdf_path.to_string_lossy().to_string()),
-                diagnostics: parse_latex_diagnostics(&combined),
+                diagnostics: parse_latex_diagnostics(&combined, &root, work_dir),
                 log: combined,
             })
         }
