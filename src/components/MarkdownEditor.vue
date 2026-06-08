@@ -10,7 +10,7 @@ import { snippetCompletion, type CompletionContext, type CompletionResult } from
 import katex from 'katex';
 import { autocompletion } from '@codemirror/autocomplete';
 import { oneDark } from '@codemirror/theme-one-dark';
-import type { DocumentKind } from '../types/app';
+import type { CustomSnippet, DocumentKind } from '../types/app';
 import type { BibEntryItem, LatexDiagnosticItem, LatexLabelItem, ProjectLatexIndex } from '../types/latexIntelligence';
 import {
   CITE_COMMANDS,
@@ -34,6 +34,7 @@ const props = defineProps<{
   rootDir?: string;
   currentPath?: string;
   fontSize?: number;
+  customSnippets?: CustomSnippet[];
 }>();
 
 const emit = defineEmits<{
@@ -293,7 +294,8 @@ function snippetSource(context: CompletionContext): CompletionResult | null {
   const word = context.matchBefore(/[\\/]?[A-Za-z][\w-]*$/);
   if (!word || (word.from === word.to && !context.explicit)) return null;
   const language = props.kind === 'latex' ? 'latex' : props.kind === 'markdown' ? 'markdown' : 'both';
-  const options = editorSnippets
+  const snippets = [...editorSnippets, ...(props.customSnippets || [])];
+  const options = snippets
     .filter((snippet) => snippet.language === language || snippet.language === 'both')
     .filter((snippet) => snippet.trigger.startsWith(word.text) || context.explicit)
     .map((snippet) => snippetCompletion(snippet.insert, {

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { EnvironmentToolCheck, FileNode, GitStatusEntry, GitWorkspace, LatexBuildResult, PersistedAppState, PdfSyncPoint, TexSourcePoint, ToolPathSettings } from '../types/app';
+import type { EnvironmentToolCheck, ExportProfile, FileNode, GitHubTokenProfile, GitStatusEntry, GitSyncResult, GitWorkspace, LatexBuildResult, PackageExportResult, PersistedAppState, PdfSyncPoint, PublishProfile, TexSourcePoint, ToolPathSettings } from '../types/app';
 
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -67,6 +67,51 @@ export async function deleteSecret(account: string): Promise<void> {
     return;
   }
   await invoke('delete_secret', { account });
+}
+
+export async function validateGithubToken(token: string): Promise<GitHubTokenProfile> {
+  const trimmed = token.trim();
+  if (!trimmed) throw new Error('GitHub token 不能为空。');
+  const response = await fetch('https://api.github.com/user', {
+    method: 'GET',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${trimmed}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  const scopes = (response.headers.get('x-oauth-scopes') || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const body = (await response.json()) as { message?: string };
+      detail = body.message ? `GitHub 返回：${body.message}` : '';
+    } catch {
+      detail = await response.text().catch(() => '');
+    }
+    if (response.status === 401) throw new Error(`GitHub token 无效或已过期。${detail}`.trim());
+    if (response.status === 403) throw new Error(`GitHub token 被拒绝，请检查权限、SSO 或访问限制。${detail}`.trim());
+    throw new Error(`GitHub token 验证失败（HTTP ${response.status}）。${detail}`.trim());
+  }
+  const data = (await response.json()) as {
+    login?: string;
+    id?: number;
+    name?: string | null;
+    html_url?: string;
+    avatar_url?: string;
+  };
+  if (!data.login) throw new Error('GitHub token 已通过请求，但响应中没有账号名。');
+  return {
+    login: data.login,
+    id: data.id,
+    name: data.name ?? null,
+    htmlUrl: data.html_url,
+    avatarUrl: data.avatar_url,
+    scopes,
+  };
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
@@ -182,9 +227,39 @@ export async function buildMarkdownPandoc(rootDir: string, relativePath: string,
 
 export type PandocExportFormat = 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer';
 
-export async function exportMarkdownPandoc(rootDir: string, relativePath: string, format: PandocExportFormat, toolPaths?: ToolPathSettings): Promise<LatexBuildResult> {
+export async function exportMarkdownPandoc(rootDir: string, relativePath: string, format: PandocExportFormat, toolPaths?: ToolPathSettings, profile?: ExportProfile): Promise<LatexBuildResult> {
   if (!isTauriRuntime()) throw new Error('Pandoc 多格式导出需要在 Tauri 桌面环境中运行，并安装 Pandoc。');
-  return invoke<LatexBuildResult>('export_markdown_pandoc', { rootDir, relativePath, format, toolPaths });
+  return invoke<LatexBuildResult>('export_markdown_pandoc', { rootDir, relativePath, format, toolPaths, profile });
+}
+
+export async function publishMarkdownProfile(rootDir: string, relativePath: string, profile: PublishProfile): Promise<PackageExportResult> {
+  if (!isTauriRuntime()) throw new Error('发布 profile 需要在 Tauri 桌面环境中运行。');
+  return invoke<PackageExportResult>('publish_markdown_profile', { rootDir, relativePath, profile });
+}
+
+export async function exportSubmissionPackage(rootDir: string, mainTex?: string, mainMarkdown?: string, pdfPath?: string, outputRoot?: string): Promise<PackageExportResult> {
+  if (!isTauriRuntime()) throw new Error('投稿包导出需要在 Tauri 桌面环境中运行。');
+  return invoke<PackageExportResult>('export_submission_package', { rootDir, mainTex, mainMarkdown, pdfPath, outputRoot });
+}
+
+export async function exportSharedReviewPackage(rootDir: string, pdfPath?: string, includeResolved = false, outputRoot?: string): Promise<PackageExportResult> {
+  if (!isTauriRuntime()) throw new Error('共享审阅包导出需要在 Tauri 桌面环境中运行。');
+  return invoke<PackageExportResult>('export_shared_review_package', { rootDir, pdfPath, includeResolved, outputRoot });
+}
+
+export async function compileTikzPreview(rootDir: string, currentRelativePath: string, source: string, toolPaths?: ToolPathSettings): Promise<string> {
+  if (!isTauriRuntime()) throw new Error('TikZ 预览需要在 Tauri 桌面环境中运行，并安装 XeLaTeX。');
+  return invoke<string>('compile_tikz_preview', { rootDir, currentRelativePath, source, toolPaths });
+}
+
+export async function gitPullWithConflictStatus(rootDir: string, branch: string, token?: string | null): Promise<GitSyncResult> {
+  if (!isTauriRuntime()) throw new Error('Git Pull 需要在 Tauri 桌面环境中运行。');
+  return invoke<GitSyncResult>('git_pull_with_conflict_status', { rootDir, branch, token });
+}
+
+export async function gitPushCurrentBranch(rootDir: string, branch: string, token?: string | null): Promise<GitSyncResult> {
+  if (!isTauriRuntime()) throw new Error('Git Push 需要在 Tauri 桌面环境中运行。');
+  return invoke<GitSyncResult>('git_push_current_branch', { rootDir, branch, token });
 }
 
 export async function checkEnvironment(toolPaths?: ToolPathSettings): Promise<EnvironmentToolCheck[]> {
@@ -221,6 +296,11 @@ export async function cleanLatex(rootDir: string, relativePath: string): Promise
 export async function openPdf(path: string): Promise<void> {
   if (!isTauriRuntime()) throw new Error('打开 PDF 需要在 Tauri 桌面环境中运行。');
   await invoke('open_pdf', { path });
+}
+
+export async function openLocalPath(path: string): Promise<void> {
+  if (!isTauriRuntime()) throw new Error('打开本地路径需要在 Tauri 桌面环境中运行。');
+  await invoke('open_path', { path });
 }
 
 export async function synctexForward(rootDir: string, relativePath: string, line: number, column: number, toolPaths?: ToolPathSettings): Promise<PdfSyncPoint> {

@@ -1,7 +1,7 @@
 {
   "name": "scholia-studio",
   "private": true,
-  "version": "0.10.13",
+  "version": "0.10.20",
   "type": "module",
   "description": "A local-first research workbench for notes, weekly reports, evidence-driven paper drafting, LaTeX/PDF review, annotation, and export.",
   "scripts": {

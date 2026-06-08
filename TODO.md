@@ -25,6 +25,19 @@
 - [x] 新增架构文档 `docs/ARCHITECTURE_RESEARCH_WORKBENCH.md`，记录后续拆分方向和交互放置规则。
 
 
+## v0.10.16 本次完成：P3 生态扩展基础版
+
+- [x] 新增 Hugo / Jekyll 发布 profile：支持 frontmatter 转换、本地图片资源复制和发布 manifest。
+- [x] Pandoc export profile 增强：DOCX reference-doc、CSL、bibliography、resource-path、citeproc 等参数可配置。
+- [x] 新增投稿包导出：复制源码、图片、BibTeX、cls/sty/bst、PDF 和 README/manifest。
+- [x] Markdown → Beamer 导出走独立 Pandoc profile，并补充 Beamer 参数。
+- [x] Markdown 预览增强：Mermaid 稳定渲染，Plotly JSON 简易 SVG 预览，TikZ 使用后端外部编译缓存。
+- [x] Snippets 支持自定义片段保存到 `.paper-notes/snippets.json`，并支持 CodeMirror Tab 占位符跳转。
+- [x] 新增 `docs/PLUGIN_API_DRAFT.md` 和 `src/services/pluginApi.ts`，固定插件 API 草案边界。
+- [x] Git Pull / Push 独立操作并显示冲突文件；共享审阅包可导出 PDF、review-items、批注和源码上下文。
+
+---
+
 ## v0.10.5 本次完成：TODO P0/P1 低风险补齐
 
 - [x] 草稿自动保存、异常关闭检测、本地恢复提示和草稿索引。
@@ -184,25 +197,25 @@
 
 ## P3.1 发布与多格式输出
 
-- [ ] Hugo / Jekyll 发布 profile、资源复制、frontmatter 转换。
-- [ ] DOCX 模板、CSL、bibliography、reference-doc 参数配置。
-- [ ] 投稿包导出：源码、图片、bib、cls/sty/bst、README、编译说明。
-- [ ] Beamer 演示文稿模板和 Markdown → Beamer 工作流完善。
+- [x] Hugo / Jekyll 发布 profile、资源复制、frontmatter 转换。
+- [x] DOCX 模板、CSL、bibliography、reference-doc 参数配置。
+- [x] 投稿包导出：源码、图片、bib、cls/sty/bst、README、编译说明。
+- [x] Beamer 演示文稿模板和 Markdown → Beamer 工作流完善。
 
 ## P3.2 可视化与插件
 
-- [ ] Mermaid 稳定渲染。
-- [ ] Plotly 图表预览。
-- [ ] TikZ 外部编译缓存。
-- [ ] 自定义 snippets 和 Tab 占位符跳转。
-- [ ] 插件 API 草案：文件索引、编辑器命令、预览扩展、导出 profile。
+- [x] Mermaid 稳定渲染。
+- [x] Plotly 图表预览。
+- [x] TikZ 外部编译缓存。
+- [x] 自定义 snippets 和 Tab 占位符跳转。
+- [x] 插件 API 草案：文件索引、编辑器命令、预览扩展、导出 profile。
 
 ## P3.3 协作与同步
 
-- [ ] GitHub Pull/Push 冲突可视化处理。
-- [ ] 批注作者和回复流增强。
-- [ ] 共享审阅包：导出 PDF + review-items + 源码上下文。
-- [ ] 云同步作为可选能力，不影响本地优先路线。
+- [x] GitHub Pull/Push 冲突可视化处理。
+- [x] 批注作者和回复流增强。
+- [x] 共享审阅包：导出 PDF + review-items + 源码上下文。
+- [x] 云同步作为可选能力，不影响本地优先路线。
 
 ---
 

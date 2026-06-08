@@ -21,6 +21,15 @@ export interface GitWorkspace {
   rootPath: string;
 }
 
+export interface GitHubTokenProfile {
+  login: string;
+  id?: number;
+  name?: string | null;
+  htmlUrl?: string;
+  avatarUrl?: string;
+  scopes?: string[];
+}
+
 export interface MarkdownDocument {
   id: string;
   title: string;
@@ -93,6 +102,24 @@ export interface PrivacySettings {
   maxPersistedTextChars?: number;
 }
 
+export interface PublishProfile {
+  id: string;
+  name: string;
+  engine: "hugo" | "jekyll";
+  contentDir: string;
+  assetDir: string;
+  frontmatterMode: "yaml" | "toml";
+  resourceStrategy: "copy-local" | "keep-path";
+  draft?: boolean;
+  baseUrl?: string;
+}
+
+export interface CollaborationSettings {
+  defaultReviewer?: string;
+  includeSourceContext?: boolean;
+  includeResolvedAnnotations?: boolean;
+}
+
 export interface ProjectSettings {
   projectType?: "paper" | "notes" | "review" | "mixed" | "plain";
   firstRunMode?: FirstRunMode;
@@ -112,6 +139,11 @@ export interface ProjectSettings {
     paperOutline?: string;
     reviewSummary?: string;
   };
+  publishing?: {
+    activeProfileId?: string;
+    profiles?: PublishProfile[];
+  };
+  collaboration?: CollaborationSettings;
 }
 
 export interface ExportProfile {
@@ -120,6 +152,16 @@ export interface ExportProfile {
   format: "pdf" | "docx" | "html" | "epub" | "latex" | "beamer";
   args: string[];
   outputDir?: string;
+  /** DOCX/HTML/PDF citation style file, e.g. ieee.csl. */
+  csl?: string;
+  /** BibTeX/BibLaTeX bibliography path. */
+  bibliography?: string;
+  /** Pandoc reference DOCX path for Word style/template control. */
+  referenceDoc?: string;
+  /** Additional Pandoc resource search paths. */
+  resourcePaths?: string[];
+  /** Whether to force --citeproc when bibliography/csl is configured. */
+  citeproc?: boolean;
   description?: string;
   lastUsedAt?: string;
 }
@@ -152,6 +194,39 @@ export interface BibEntryPayload {
   note?: string;
 }
 
+export type BottomDockTab = 'problems' | 'output' | 'log' | 'ai-chat' | 'evidence' | 'diff-review' | 'model';
+
+export interface CustomSnippet {
+  id: string;
+  trigger: string;
+  label: string;
+  detail: string;
+  language: 'latex' | 'markdown' | 'both';
+  insert: string;
+  updatedAt: string;
+}
+
+export interface GitSyncResult {
+  ok: boolean;
+  command: string;
+  log: string;
+  conflictedFiles: string[];
+}
+
+export interface PackageExportResult {
+  ok: boolean;
+  outputDir: string;
+  copiedFiles: string[];
+  skippedFiles: string[];
+  manifestPath: string;
+}
+
+export interface PluginApiDescriptor {
+  version: string;
+  extensionPoints: Array<'fileIndex' | 'editorCommand' | 'previewExtension' | 'exportProfile'>;
+  manifestExample: string;
+}
+
 export interface LayoutSettings {
   explorerWidth: number;
   templatePanelWidth: number;
@@ -159,6 +234,12 @@ export interface LayoutSettings {
   previewWidth: number;
   annotationPanelWidth: number;
   bottomPanelHeight: number;
+  /** 底部面板是否展开。 */
+  bottomDockVisible: boolean;
+  /** 底部面板当前标签页。 */
+  bottomDockActiveTab: BottomDockTab;
+  /** 旧版底部 AI 证据写作面板高度，保留用于兼容历史布局状态。 */
+  aiPanelHeight: number;
   /** 编辑器字体大小，支持 Ctrl/Cmd + 鼠标滚轮缩放。 */
   editorFontSize: number;
   editorSidePanelWidths: Partial<Record<"workflow" | "outline" | "bib" | "snippets" | "history", number>>;
@@ -345,6 +426,8 @@ export interface PersistedAppState {
   workspace?: GitWorkspace;
   /** 设置中的用户名，也作为本地文件/文件夹批注作者。 */
   commentAuthorName?: string;
+  /** 最近一次通过 GitHub Token 验证得到的账号名；token 本身只保存在系统凭据中。 */
+  githubLogin?: string;
   gitStatus: GitStatusEntry[];
   editor: {
     darkMode: boolean;

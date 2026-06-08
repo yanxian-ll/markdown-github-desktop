@@ -10,7 +10,7 @@ import PdfPreview from "./components/PdfPreview.vue";
 import AnnotationSidebar from "./components/AnnotationSidebar.vue";
 import Toolbar from "./components/Toolbar.vue";
 import BibPreviewPopover from "./components/BibPreviewPopover.vue";
-import BuildPanel from './components/BuildPanel.vue';
+import BottomDock from './components/BottomDock.vue';
 import BibManagerPanel from './components/BibManagerPanel.vue';
 import SnippetPanel from './components/SnippetPanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
@@ -18,7 +18,7 @@ import WelcomeStart from './components/WelcomeStart.vue';
 import TemplateGallery from './components/TemplateGallery.vue';
 import ResearchFlowPanel from './components/ResearchFlowPanel.vue';
 import { useAppStore } from "./stores/appStore";
-import type { DocumentKind, FileNode, PaperAnnotationRect, FirstRunMode } from "./types/app";
+import type { BottomDockTab, DocumentKind, FileNode, PaperAnnotationRect, FirstRunMode } from "./types/app";
 import type { ResearchFlowActionId } from './config/workbench';
 
 const store = useAppStore();
@@ -30,6 +30,7 @@ const {
   darkMode,
   dirtyCount,
   error,
+  appLog,
   explorerVisible,
   fileTree,
   selectedNodePath,
@@ -40,6 +41,7 @@ const {
   workspaceBusy,
   gitEntries,
   gitPanelVisible,
+  githubLogin,
   githubUserHint,
   isLatexActive,
   latexResult,
@@ -70,7 +72,15 @@ const {
   draftCount,
   projectSettings,
   exportProfiles,
+  customSnippets,
+  lastPackageExport,
+  lastGitSyncResult,
   researchFlowStatuses,
+  aiGroundingMode,
+  aiMessages,
+  aiIndexStats,
+  aiEvidencePack,
+  aiProposedPatches,
 } = storeToRefs(store);
 
 const activeText = computed({
@@ -138,6 +148,8 @@ const explorerWidth = ref(280);
 const settingsWidth = ref(360);
 const previewWidth = ref(560);
 const bottomPanelHeight = ref(260);
+const bottomDockVisible = ref(false);
+const bottomDockActiveTab = ref<BottomDockTab>('problems');
 const imageZoom = ref(1);
 const markdownPdfPreviewMode = ref(false);
 const previewExportMenuVisible = ref(false);
@@ -147,11 +159,10 @@ const editorSidePanelWidth = ref(280);
 const editorFontSize = ref(14);
 const editorOutlineVisible = ref(false);
 const sideWorkPanel = ref<'workflow' | 'outline' | 'bib' | 'snippets' | 'history' | null>(null);
-const bottomPanelVisible = ref(false);
 const templatePanelVisible = ref(false);
 const templatePanelWidth = ref(340);
 const scratchEditorVisible = ref(false);
-let resizeTarget: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom" | null =
+let resizeTarget: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom" | "bottomReveal" | null =
   null;
 let annotationResizeRight = 0;
 let editorSideResizeLeft = 0;
@@ -225,6 +236,8 @@ watch(
     previewWidth.value = layout.previewWidth;
     annotationPanelWidth.value = layout.annotationPanelWidth;
     bottomPanelHeight.value = layout.bottomPanelHeight;
+    bottomDockVisible.value = !!layout.bottomDockVisible;
+    bottomDockActiveTab.value = layout.bottomDockActiveTab || 'problems';
     editorFontSize.value = clamp(layout.editorFontSize || 14, 11, 28);
     if (sideWorkPanel.value) {
       editorSidePanelWidth.value = layout.editorSidePanelWidths[sideWorkPanel.value] || editorSidePanelWidth.value;
@@ -243,7 +256,7 @@ watch(
 );
 
 watch(
-  () => [explorerWidth.value, templatePanelWidth.value, settingsWidth.value, previewWidth.value, annotationPanelWidth.value, bottomPanelHeight.value, editorFontSize.value],
+  () => [explorerWidth.value, templatePanelWidth.value, settingsWidth.value, previewWidth.value, annotationPanelWidth.value, bottomPanelHeight.value, bottomDockVisible.value, bottomDockActiveTab.value, editorFontSize.value],
   () => {
     if (applyingPersistedLayout) return;
     window.clearTimeout(layoutPersistTimer);
@@ -255,6 +268,8 @@ watch(
         previewWidth: previewWidth.value,
         annotationPanelWidth: annotationPanelWidth.value,
         bottomPanelHeight: bottomPanelHeight.value,
+        bottomDockVisible: bottomDockVisible.value,
+        bottomDockActiveTab: bottomDockActiveTab.value,
         editorFontSize: editorFontSize.value,
       });
     }, 500);
@@ -278,7 +293,8 @@ watch(
     explorerVisible.value,
     gitPanelVisible.value,
     editorPaneVisible.value,
-    bottomPanelHeight.value,
+    bottomDockVisible.value,
+    bottomDockActiveTab.value,
     activeDocumentId.value,
   ],
   () => {
@@ -312,7 +328,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function startResize(
-  target: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom",
+  target: "explorer" | "template" | "settings" | "preview" | "annotation" | "editorSide" | "bottom" | "bottomReveal",
   event: MouseEvent,
 ) {
   resizeTarget = target;
@@ -330,7 +346,7 @@ function startResize(
     editorSideResizeLeft = layout?.getBoundingClientRect().left ?? 0;
   }
   event.preventDefault();
-  document.body.classList.add("drag-resizing", target === "bottom" ? "drag-resizing-y" : "drag-resizing-x");
+  document.body.classList.add("drag-resizing", target === "bottom" || target === "bottomReveal" ? "drag-resizing-y" : "drag-resizing-x");
 }
 
 function onResizeMove(event: MouseEvent) {
@@ -379,8 +395,11 @@ function onResizeMove(event: MouseEvent) {
       220,
       Math.min(560, maxEditorSideWidth),
     );
-  } else if (resizeTarget === "bottom") {
-    bottomPanelHeight.value = clamp(window.innerHeight - event.clientY - 32, 160, Math.min(620, window.innerHeight - 120));
+  } else if (resizeTarget === 'bottom' || resizeTarget === 'bottomReveal') {
+    bottomPanelHeight.value = clamp(window.innerHeight - event.clientY - 32, 160, Math.min(680, window.innerHeight - 120));
+    if (resizeTarget === 'bottomReveal') {
+      openBottomDock('ai-chat');
+    }
   }
 }
 
@@ -398,6 +417,8 @@ function stopResize() {
       previewWidth: previewWidth.value,
       annotationPanelWidth: annotationPanelWidth.value,
       bottomPanelHeight: bottomPanelHeight.value,
+      bottomDockVisible: bottomDockVisible.value,
+      bottomDockActiveTab: bottomDockActiveTab.value,
       editorFontSize: editorFontSize.value,
     });
   }
@@ -463,6 +484,51 @@ async function closeDocumentTab(id: string) {
 
 function focusEditorDocument(id?: string) {
   if (id && activeDocumentId.value !== id) store.setActiveDocument(id);
+}
+
+const aiBottomTabs = new Set<BottomDockTab>(['ai-chat', 'evidence', 'diff-review', 'model']);
+
+const buildProblemCount = computed(() =>
+  activeDocumentDiagnostics.value.length + (latexResult.value?.diagnostics?.length || 0),
+);
+
+function isAiBottomTab(tab: BottomDockTab) {
+  return aiBottomTabs.has(tab);
+}
+
+function openBottomDock(tab: BottomDockTab) {
+  bottomDockVisible.value = true;
+  bottomDockActiveTab.value = tab;
+  if (isAiBottomTab(tab)) store.refreshAiFrameworkIndex();
+}
+
+function closeBottomDock() {
+  bottomDockVisible.value = false;
+}
+
+function toggleBottomDock(tab: BottomDockTab) {
+  if (bottomDockVisible.value && bottomDockActiveTab.value === tab) {
+    closeBottomDock();
+    return;
+  }
+  openBottomDock(tab);
+}
+
+function setBottomDockTab(tab: BottomDockTab) {
+  bottomDockActiveTab.value = tab;
+  if (isAiBottomTab(tab)) store.refreshAiFrameworkIndex();
+}
+
+function startBottomReveal(event: MouseEvent) {
+  startResize('bottomReveal', event);
+}
+
+function maybeShowProblemsAfterBuild() {
+  const hasProblems = buildProblemCount.value > 0 || latexResult.value?.ok === false;
+  if (!hasProblems) return;
+  if (!bottomDockVisible.value || !isAiBottomTab(bottomDockActiveTab.value)) {
+    openBottomDock('problems');
+  }
 }
 
 async function saveLocal() {
@@ -546,9 +612,11 @@ async function buildActiveDocument() {
     if (activeDocument.value?.kind === "markdown") {
       await store.buildMarkdownPandoc();
       if (pdfPreviewUrl.value) markdownPdfPreviewMode.value = true;
+      maybeShowProblemsAfterBuild();
       return;
     }
     await store.buildLatex();
+    maybeShowProblemsAfterBuild();
   } catch (err) {
     store.error = err instanceof Error ? err.message : String(err);
   }
@@ -893,7 +961,7 @@ onBeforeUnmount(() => {
               >
                 ◫
               </button>
-              <button class="toolbar-icon" :class="{ active: bottomPanelVisible }" title="问题 / 输出 / 日志" @click="bottomPanelVisible = !bottomPanelVisible">⚠</button>
+              <button class="toolbar-icon" :class="{ active: bottomDockVisible && ['problems','output','log'].includes(bottomDockActiveTab) }" title="问题 / 输出 / 日志" @click="toggleBottomDock('problems')">⚠</button>
               <span
                 v-if="activeDiagnosticCount"
                 class="editor-diagnostic-pill"
@@ -939,7 +1007,7 @@ onBeforeUnmount(() => {
                 @remove="store.removeBibEntry"
                 @close="sideWorkPanel = null"
               />
-              <SnippetPanel v-else-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" @close="sideWorkPanel = null" />
+              <SnippetPanel v-else-if="sideWorkPanel === 'snippets'" :kind="activeDocument?.kind" :custom-snippets="customSnippets" @update-custom-snippets="store.saveCustomSnippets" @close="sideWorkPanel = null" />
               <HistoryPanel v-else-if="sideWorkPanel === 'history'" :entries="gitEntries" :local="workspace?.source === 'local'" @close="sideWorkPanel = null" />
             </div>
             <div
@@ -961,6 +1029,7 @@ onBeforeUnmount(() => {
                   :root-dir="workspace?.localDir"
                   :current-path="primaryDocument?.relativePath"
                   :font-size="editorFontSize"
+                  :custom-snippets="customSnippets"
                   @save="saveLocal"
                   @build="buildLatex"
                   @source-dblclick="syncTexForward"
@@ -1292,6 +1361,7 @@ onBeforeUnmount(() => {
         v-if="gitPanelVisible"
         :visible="gitPanelVisible"
         :user-hint="githubUserHint"
+        :github-login="githubLogin"
         :workspace="workspace"
         :comment-author-name="commentAuthorName"
         :git-entries="gitEntries"
@@ -1309,6 +1379,8 @@ onBeforeUnmount(() => {
         :draft-count="draftCount"
         :project-settings="projectSettings"
         :export-profiles="exportProfiles"
+        :last-package-export="lastPackageExport"
+        :last-git-sync-result="lastGitSyncResult"
         @set-token="store.setGithubToken"
         @forget-token="store.forgetGithubToken"
         @clone="store.cloneWorkspace"
@@ -1325,21 +1397,46 @@ onBeforeUnmount(() => {
         @create-snapshot="store.createLocalSnapshot"
         @export-debug="store.exportDebugBundle"
         @update-project-setting="store.setProjectSetting"
+        @update-export-profile="store.updateExportProfile"
+        @update-publish-profile="store.updatePublishProfile"
+        @publish-active="store.publishActiveMarkdown"
+        @export-submission-package="store.exportSubmissionPackageAction"
+        @export-shared-review-package="store.exportSharedReviewPackageAction"
+        @open-package-folder="store.openExportedPackageFolder"
+        @git-pull="store.gitPullWorkspace"
+        @git-push="store.gitPushWorkspace"
         @hide="gitPanelVisible = false"
       />
     </main>
 
-    <BuildPanel
-      v-if="bottomPanelVisible"
+    <BottomDock
+      v-if="bottomDockVisible"
+      :style="bottomPanelStyle"
+      :active-tab="bottomDockActiveTab"
       :diagnostics="activeDocumentDiagnostics"
       :latex-result="latexResult"
-      :style="bottomPanelStyle"
+      :app-log="appLog"
+      :grounding-mode="aiGroundingMode"
+      :index-stats="aiIndexStats"
+      :evidence-pack="aiEvidencePack"
+      :messages="aiMessages"
+      :patches="aiProposedPatches"
+      :active-path="activeDocument?.relativePath || activeDocument?.title"
       @resize-start="startResize('bottom', $event)"
+      @update-active-tab="setBottomDockTab"
       @open-diagnostic="handleDiagnosticOpen"
-      @close="bottomPanelVisible = false"
+      @update-grounding-mode="store.setAiGroundingMode"
+      @send-prompt="store.sendAiFrameworkPrompt"
+      @rebuild-evidence="store.refreshAiFrameworkIndex"
+      @close="closeBottomDock"
     />
 
-
+    <div
+      v-if="!bottomDockVisible"
+      class="bottom-dock-reveal-grip"
+      title="向上拖出底部面板；默认打开 AI 对话"
+      @mousedown="startBottomReveal"
+    />
 
     <footer class="statusbar">
       <button class="link-button" @click="darkMode = !darkMode">
@@ -1347,7 +1444,8 @@ onBeforeUnmount(() => {
       </button>
       <button class="link-button" @click="store.refreshWorkspace">刷新工作区</button>
       <button class="link-button" @click="sideWorkPanel = sideWorkPanel === 'history' ? null : 'history'">历史</button>
-      <button class="link-button" @click="bottomPanelVisible = !bottomPanelVisible">问题</button>
+      <button class="link-button" @click="toggleBottomDock('problems')">问题 {{ buildProblemCount }}</button>
+      <button class="link-button" @click="toggleBottomDock('ai-chat')">AI</button>
       <span>{{ busy ? "处理中…" : status }}</span>
       <span v-if="activeDocumentId"
         >当前：{{ activeDocument?.relativePath || activeDocument?.title }}</span

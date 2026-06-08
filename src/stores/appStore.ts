@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { sampleLatex, sampleMarkdown } from "../services/markdown";
 import isprsCls from "../templates/vendor/isprs/isprs.cls?raw";
 import isprsBst from "../templates/vendor/isprs/isprs.bst?raw";
@@ -30,6 +30,7 @@ import {
   renameWorkspaceItem,
   saveAppState,
   setSecret,
+  validateGithubToken,
   synctexForward,
   synctexReverse,
   writeWorkspaceAnnotations,
@@ -37,6 +38,12 @@ import {
   saveTextFileWithDialog,
   checkEnvironment,
   createSampleWorkspace,
+  publishMarkdownProfile,
+  exportSubmissionPackage,
+  exportSharedReviewPackage,
+  gitPullWithConflictStatus,
+  gitPushCurrentBranch,
+  openLocalPath as openTauriPath,
 } from "../services/tauriBridge";
 import type {
   DocumentKind,
@@ -60,11 +67,28 @@ import type {
   LayoutSettings,
   ProjectSettings,
   ExportProfile,
+  PublishProfile,
+  CustomSnippet,
+  PackageExportResult,
+  GitSyncResult,
   FirstRunMode,
   ResearchFlowStepStatus,
   AnnotationExportFormat,
   BibEntryPayload,
 } from "../types/app";
+import type {
+  AiConversationMessage,
+  AiEvidencePack,
+  AiGroundingMode,
+  AiIndexStats,
+  ProposedPatch,
+} from "../types/ai";
+import {
+  buildAnnotationEvidenceSeed,
+  buildDocumentEvidenceSeed,
+  createEmptyAiIndexStats,
+  createEvidencePack,
+} from "../services/ai/evidenceIndex";
 import type {
   BibEntryItem,
   LatexOutlineItem,
@@ -293,6 +317,9 @@ function defaultLayoutSettings(): LayoutSettings {
     previewWidth: 560,
     annotationPanelWidth: 300,
     bottomPanelHeight: 260,
+    bottomDockVisible: false,
+    bottomDockActiveTab: 'problems',
+    aiPanelHeight: 320,
     editorFontSize: 14,
     editorSidePanelWidths: {
       workflow: 340,
@@ -334,17 +361,32 @@ function defaultProjectSettings(): ProjectSettings {
       paperOutline: "paper/paper-outline.md",
       reviewSummary: ".paper-notes/review-summary.md",
     },
+    publishing: {
+      activeProfileId: "hugo-default",
+      profiles: defaultPublishProfiles(),
+    },
+    collaboration: {
+      includeSourceContext: true,
+      includeResolvedAnnotations: false,
+    },
   };
+}
+
+function defaultPublishProfiles(): PublishProfile[] {
+  return [
+    { id: "hugo-default", name: "Hugo 内容包", engine: "hugo", contentDir: "publication/hugo/content/posts", assetDir: "publication/hugo/static/assets", frontmatterMode: "yaml", resourceStrategy: "copy-local", draft: true },
+    { id: "jekyll-default", name: "Jekyll 文章", engine: "jekyll", contentDir: "publication/jekyll/_posts", assetDir: "publication/jekyll/assets", frontmatterMode: "yaml", resourceStrategy: "copy-local", draft: true },
+  ];
 }
 
 function defaultExportProfiles(): ExportProfile[] {
   return [
-    { id: "pdf", name: "PDF", format: "pdf", args: ["--pdf-engine=xelatex"], description: "Pandoc PDF，默认使用 XeLaTeX" },
-    { id: "docx", name: "Word DOCX", format: "docx", args: [], description: "导出给导师/合作者审阅" },
-    { id: "html", name: "HTML", format: "html", args: ["--standalone"], description: "单文件网页预览" },
-    { id: "epub", name: "EPUB", format: "epub", args: [], description: "电子书草稿" },
+    { id: "pdf", name: "PDF", format: "pdf", args: ["--pdf-engine=xelatex"], bibliography: "refs.bib", citeproc: true, description: "Pandoc PDF，默认使用 XeLaTeX，可绑定 CSL/BibTeX" },
+    { id: "docx", name: "Word DOCX", format: "docx", args: [], bibliography: "refs.bib", csl: "", referenceDoc: "", citeproc: true, description: "导出给导师/合作者审阅；支持 reference-doc、CSL、bibliography" },
+    { id: "html", name: "HTML", format: "html", args: ["--standalone"], bibliography: "refs.bib", citeproc: true, description: "单文件网页预览" },
+    { id: "epub", name: "EPUB", format: "epub", args: [], bibliography: "refs.bib", citeproc: true, description: "电子书草稿" },
     { id: "latex", name: "LaTeX", format: "latex", args: ["-t", "latex"], description: "从 Markdown 生成 .tex" },
-    { id: "beamer", name: "Beamer PDF", format: "beamer", args: ["-t", "beamer", "--pdf-engine=xelatex"], description: "Markdown 到 Beamer 幻灯片" },
+    { id: "beamer", name: "Beamer PDF", format: "beamer", args: ["-t", "beamer", "--pdf-engine=xelatex", "--slide-level=2"], bibliography: "refs.bib", citeproc: true, description: "Markdown 到 Beamer 幻灯片" },
   ];
 }
 
@@ -867,6 +909,7 @@ export const useAppStore = defineStore("app", () => {
   const workspace = ref<GitWorkspace>();
   const gitEntries = ref<GitStatusEntry[]>([]);
   const githubToken = ref<string | null>(null);
+  const githubLogin = ref<string>("");
   const githubUserHint = ref<string>("");
   const commentAuthorName = ref<string>("");
   const darkMode = ref(true);
@@ -877,6 +920,8 @@ export const useAppStore = defineStore("app", () => {
   const runningTasks = ref<Record<string, boolean>>({});
   const status = ref("准备就绪");
   const error = ref<string>("");
+  const appLogLines = ref<string[]>([]);
+  const appLog = computed(() => appLogLines.value.join("\n"));
   const latexResult = ref<LatexBuildResult | null>(null);
   const pdfPreviewUrl = ref<string>("");
   const pdfPreviewPath = ref<string>("");
@@ -895,9 +940,94 @@ export const useAppStore = defineStore("app", () => {
   const layoutSettings = ref<LayoutSettings>(defaultLayoutSettings());
   const projectSettings = ref<ProjectSettings>(defaultProjectSettings());
   const exportProfiles = ref<ExportProfile[]>(defaultExportProfiles());
+  const customSnippets = ref<CustomSnippet[]>([]);
+  const lastPackageExport = ref<PackageExportResult | null>(null);
+  const lastGitSyncResult = ref<GitSyncResult | null>(null);
   const recoveryWarning = ref("");
   const draftCount = ref(0);
+  const aiGroundingMode = ref<AiGroundingMode>("evidence_only");
+  const aiMessages = ref<AiConversationMessage[]>([]);
+  const aiIndexStats = ref<AiIndexStats>(createEmptyAiIndexStats());
+  const aiEvidencePack = ref<AiEvidencePack | null>(null);
+  const aiProposedPatches = ref<ProposedPatch[]>([]);
   let draftSaveTimer: number | undefined;
+
+  function refreshAiFrameworkIndex() {
+    const markdown = documents.value.filter((doc) => doc.kind === "markdown").length;
+    const tex = documents.value.filter((doc) => doc.kind === "latex").length;
+    const bibtex = documents.value.filter((doc) => doc.kind === "bibtex").length + latexIndex.value.bibFiles.length;
+    const pdfAnnotation = annotations.value.length;
+    const evidenceIndex = documents.value.filter((doc) => doc.relativePath?.includes("evidence-index")).length;
+    const reviewItem = annotations.value.filter((annotation) => annotation.taskMarker || annotation.needsReview).length;
+    const total = markdown + tex + bibtex + pdfAnnotation + evidenceIndex + reviewItem;
+    aiIndexStats.value = {
+      total,
+      markdown,
+      tex,
+      bibtex,
+      pdfAnnotation,
+      reviewItem,
+      evidenceIndex,
+      status: "ready",
+      indexedAt: new Date().toISOString(),
+      message: total ? "已根据当前打开文档和批注建立框架级索引统计。" : "尚未发现可索引证据。",
+    };
+    return aiIndexStats.value;
+  }
+
+  function setAiGroundingMode(mode: AiGroundingMode) {
+    aiGroundingMode.value = mode;
+  }
+
+  function sendAiFrameworkPrompt(prompt: string) {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+    const now = new Date().toISOString();
+    const userMessage: AiConversationMessage = {
+      id: makeId(),
+      role: "user",
+      text: trimmed,
+      createdAt: now,
+    };
+    const activePath = activeDocument.value?.relativePath || activeDocument.value?.title;
+    const evidence = [
+      ...buildDocumentEvidenceSeed(activeDocument.value),
+      ...buildAnnotationEvidenceSeed(annotations.value, activePath),
+    ];
+    aiEvidencePack.value = createEvidencePack({
+      mode: aiGroundingMode.value,
+      task: trimmed.includes("diff") || trimmed.includes("修改") ? "edit_source" : "answer_question",
+      query: trimmed,
+      targetFile: activePath,
+      evidence,
+    });
+    const citations = evidence.slice(0, 6).map((item) => ({
+      evidenceId: item.id,
+      label: item.annotationId
+        ? `${item.filePath}#${item.annotationId}`
+        : item.bibKey
+          ? `${item.filePath}:@${item.bibKey}`
+          : `${item.filePath}${item.lineStart ? `:L${item.lineStart}${item.lineEnd && item.lineEnd !== item.lineStart ? `-L${item.lineEnd}` : ""}` : ""}`,
+      filePath: item.filePath,
+      lineStart: item.lineStart,
+      lineEnd: item.lineEnd,
+      annotationId: item.annotationId,
+      bibKey: item.bibKey,
+    }));
+    const assistantMessage: AiConversationMessage = {
+      id: makeId(),
+      role: "assistant",
+      createdAt: new Date().toISOString(),
+      taskType: aiEvidencePack.value.task,
+      text: evidence.length
+        ? "已生成 Evidence Pack 框架。正式 AI 接入后，回答会只引用本次证据包中的 evidenceId，并在源码修改前生成 diff。"
+        : "当前没有检索到可用证据。只使用证据库模式下，正式 AI 接入后会拒绝编写正文，并列出需要补充的证据。",
+      citations,
+      missingEvidence: evidence.length ? [] : ["需要先索引 Markdown、TeX、BibTeX、PDF 批注、review-items 或 evidence-index。"],
+    };
+    aiMessages.value = [...aiMessages.value, userMessage, assistantMessage];
+    refreshAiFrameworkIndex();
+  }
 
   function currentAnnotationAuthor() {
     return (
@@ -996,7 +1126,9 @@ export const useAppStore = defineStore("app", () => {
   const latexBusy = computed(() => !!runningTasks.value["latex-build"]);
   const gitBusy = computed(
     () =>
-      !!runningTasks.value["git-submit"] || !!runningTasks.value["git-clone"],
+      !!runningTasks.value["git-submit"] ||
+      !!runningTasks.value["git-clone"] ||
+      !!runningTasks.value["git-token"],
   );
   const workspaceBusy = computed(
     () =>
@@ -1082,6 +1214,42 @@ export const useAppStore = defineStore("app", () => {
     ];
   });
 
+  function appendAppLog(scope: string, message: string, detail?: string) {
+    const stamp = new Date().toLocaleString();
+    const lines = [`[${stamp}] [${scope}] ${message}`];
+    const cleanedDetail = detail?.trim();
+    if (cleanedDetail) {
+      lines.push(
+        ...cleanedDetail
+          .split(/\r?\n/)
+          .map((line) => `  ${line}`),
+      );
+    }
+    appLogLines.value = [...appLogLines.value, ...lines].slice(-1200);
+  }
+
+  function appendPackageLog(scope: string, result: PackageExportResult) {
+    appendAppLog(
+      scope,
+      result.ok ? `完成：${result.outputDir}` : `完成但存在跳过项：${result.outputDir}`,
+      [
+        `manifest: ${result.manifestPath}`,
+        `copied: ${result.copiedFiles.length}`,
+        result.copiedFiles.length ? result.copiedFiles.map((file) => `  + ${file}`).join("\n") : "",
+        `skipped: ${result.skippedFiles.length}`,
+        result.skippedFiles.length ? result.skippedFiles.map((file) => `  - ${file}`).join("\n") : "",
+      ].filter(Boolean).join("\n"),
+    );
+  }
+
+  watch(status, (next) => {
+    if (next) appendAppLog("状态", next);
+  });
+
+  watch(error, (next) => {
+    if (next) appendAppLog("错误", next);
+  });
+
   async function runExclusive<T>(
     key: string,
     label: string,
@@ -1139,6 +1307,7 @@ export const useAppStore = defineStore("app", () => {
       fileTree: [],
       workspace: workspace.value,
       commentAuthorName: commentAuthorName.value,
+      githubLogin: githubLogin.value,
       gitStatus: [],
       editor: {
         darkMode: darkMode.value,
@@ -1206,6 +1375,13 @@ export const useAppStore = defineStore("app", () => {
     status.value = missingRequired.length
       ? `环境检查完成：${missingRequired.length} 个必需依赖缺失。`
       : "环境检查通过：必需依赖可用。";
+    appendAppLog(
+      "环境检查",
+      status.value,
+      environmentChecks.value
+        .map((item) => `${item.ok ? "OK" : item.required ? "MISSING" : "WARN"} ${item.label}: ${item.version || item.error || item.command}`)
+        .join("\n"),
+    );
     await persist();
   }
 
@@ -1227,6 +1403,7 @@ export const useAppStore = defineStore("app", () => {
     if (!workspace.value?.localDir) {
       projectSettings.value = defaultProjectSettings();
       exportProfiles.value = defaultExportProfiles();
+      customSnippets.value = [];
       return;
     }
     try {
@@ -1239,6 +1416,12 @@ export const useAppStore = defineStore("app", () => {
           ...parsed,
           privacy: { ...(defaults.privacy || {}), ...(parsed.privacy || {}) },
           researchFlowPaths: { ...(defaults.researchFlowPaths || {}), ...(parsed.researchFlowPaths || {}) },
+          publishing: {
+            ...(defaults.publishing || {}),
+            ...(parsed.publishing || {}),
+            profiles: parsed.publishing?.profiles?.length ? parsed.publishing.profiles : defaults.publishing?.profiles,
+          },
+          collaboration: { ...(defaults.collaboration || {}), ...(parsed.collaboration || {}) },
         };
         if (parsed.toolPaths) toolPaths.value = { ...toolPaths.value, ...parsed.toolPaths };
         if (parsed.pdfRenderQuality) pdfRenderQuality.value = parsed.pdfRenderQuality;
@@ -1252,6 +1435,13 @@ export const useAppStore = defineStore("app", () => {
       exportProfiles.value = Array.isArray(parsed) ? parsed : defaultExportProfiles();
     } catch {
       exportProfiles.value = defaultExportProfiles();
+    }
+    try {
+      const content = await readWorkspaceFile(workspace.value.localDir, ".paper-notes/snippets.json");
+      const parsed = JSON.parse(content);
+      customSnippets.value = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      customSnippets.value = [];
     }
   }
 
@@ -1758,8 +1948,9 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
       }
       exportProfiles.value = initial.exportProfiles?.length ? initial.exportProfiles : defaultExportProfiles();
       const wasCleanShutdown = initial.recovery?.shutdownClean ?? true;
+      githubLogin.value = initial.githubLogin || "";
       commentAuthorName.value =
-        initial.commentAuthorName || initial.workspace?.owner || "";
+        initial.commentAuthorName || githubLogin.value || initial.workspace?.owner || "";
       if (!commentAuthorName.value.trim()) {
         try {
           commentAuthorName.value = (await currentSystemUsername()) || "";
@@ -1781,7 +1972,12 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
         ? (savedMarkdownPreset as MarkdownRenderPreset)
         : "default";
       githubToken.value = await getSecret(GITHUB_TOKEN_ACCOUNT);
-      githubUserHint.value = githubToken.value ? "已保存 token" : "";
+      githubUserHint.value = githubToken.value
+        ? githubLogin.value
+          ? `已保存 token：${githubLogin.value}`
+          : "已保存 token（未验证）"
+        : "";
+      if (githubToken.value) void refreshSavedGithubTokenProfile();
       if (workspace.value?.localDir) {
         await loadAnnotations();
         await refreshWorkspace();
@@ -1800,20 +1996,70 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
     }
   }
 
+  function applyGithubProfile(login: string) {
+    const normalizedLogin = login.trim();
+    if (!normalizedLogin) return;
+    githubLogin.value = normalizedLogin;
+    // 当前界面里“GitHub 用户名”同时作为默认批注作者。验证 token 后优先使用真实 GitHub login，
+    // 用户仍然可以在“作者”页单独改成自己的中文名或其他署名。
+    commentAuthorName.value = normalizedLogin;
+    if (workspace.value && workspace.value.source !== "local") {
+      workspace.value = { ...workspace.value, owner: normalizedLogin };
+    }
+  }
+
+  async function refreshSavedGithubTokenProfile() {
+    if (!githubToken.value) return;
+    try {
+      const profile = await validateGithubToken(githubToken.value);
+      applyGithubProfile(profile.login);
+      githubUserHint.value = `已验证：${profile.login}`;
+      appendAppLog("GitHub Token", `已验证已保存 token，用户名更新为 ${profile.login}。`);
+      await persist();
+    } catch (err) {
+      githubUserHint.value = githubLogin.value
+        ? `已保存 token：${githubLogin.value}（本次验证失败）`
+        : "已保存 token（本次验证失败）";
+      appendAppLog("GitHub Token", "后台验证失败。", err instanceof Error ? err.message : String(err));
+      console.warn("GitHub token background validation failed", err);
+    }
+  }
+
   async function setGithubToken(token: string) {
-    const trimmed = token.trim();
-    if (!trimmed) throw new Error("GitHub token 不能为空。");
-    await setSecret(GITHUB_TOKEN_ACCOUNT, trimmed);
-    githubToken.value = trimmed;
-    githubUserHint.value = "已保存 token";
-    status.value = "GitHub token 已保存到系统凭据。";
+    return runExclusive("git-token", "GitHub token 验证", async () => {
+      const trimmed = token.trim();
+      if (!trimmed) {
+        error.value = "GitHub token 不能为空。";
+        status.value = "GitHub token 未保存。";
+        return;
+      }
+      error.value = "";
+      status.value = "正在验证 GitHub token…";
+      try {
+        const profile = await validateGithubToken(trimmed);
+        await setSecret(GITHUB_TOKEN_ACCOUNT, trimmed);
+        githubToken.value = trimmed;
+        applyGithubProfile(profile.login);
+        githubUserHint.value = `已验证：${profile.login}`;
+        status.value = `GitHub token 已验证并保存，用户名已填入为 ${profile.login}。`;
+        appendAppLog("GitHub Token", `验证成功，GitHub 工作区用户名已更新为 ${profile.login}。`);
+        await persist();
+      } catch (err) {
+        error.value = err instanceof Error ? err.message : String(err);
+        status.value = "GitHub token 验证失败，未保存新 token。";
+        appendAppLog("GitHub Token", "验证失败，未保存新 token。", error.value);
+      }
+    });
   }
 
   async function forgetGithubToken() {
     await deleteSecret(GITHUB_TOKEN_ACCOUNT);
     githubToken.value = null;
+    githubLogin.value = "";
     githubUserHint.value = "";
     status.value = "已移除 GitHub token。";
+    appendAppLog("GitHub Token", "已移除保存的 token 和 GitHub 用户名。");
+    await persist();
   }
 
   async function cloneWorkspace(nextWorkspace: GitWorkspace) {
@@ -1833,6 +2079,7 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
           normalized,
           githubToken.value,
         );
+        appendAppLog("Git", `获取/更新仓库完成：${normalized.owner}/${normalized.repo}#${normalized.branch}`, output);
         workspace.value = normalized;
         status.value = output.trim() || "Git 仓库已准备好，左侧目录树已刷新。";
         await loadAnnotations();
@@ -2532,6 +2779,7 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
           defaultMessage,
           githubToken.value,
         );
+        appendAppLog("Git", `提交并推送完成：${defaultMessage}`, output);
         status.value = output.trim() || "已提交并 push 到 GitHub。";
         await refreshWorkspace();
         documents.value.forEach((doc) => {
@@ -2636,6 +2884,11 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
           targetPath,
           toolPaths.value,
         );
+        appendAppLog(
+          "LaTeX/PDF",
+          result.ok ? `构建成功：${result.pdfPath || targetPath}` : `构建失败：${targetPath}`,
+          `${result.command}\n\n${result.log}`,
+        );
         if (activeDocumentId.value !== buildForDocumentId) {
           latexResult.value = result;
           status.value = `LaTeX 构建完成，但当前已切换到其他文件。`;
@@ -2677,6 +2930,11 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
           targetPath,
           toolPaths.value,
         );
+        appendAppLog(
+          "Markdown/Pandoc",
+          result.ok ? `PDF 构建成功：${result.pdfPath || targetPath}` : `PDF 构建失败：${targetPath}`,
+          `${result.command}\n\n${result.log}`,
+        );
         if (activeDocumentId.value !== buildForDocumentId) {
           latexResult.value = result;
           status.value = "Markdown PDF 构建完成，但当前已切换到其他文件。";
@@ -2706,10 +2964,12 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
     ) {
       throw new Error("当前文件不是工作区内的 .tex 文件。");
     }
-    status.value = await cleanLatexFiles(
+    const cleanOutput = await cleanLatexFiles(
       workspace.value.localDir,
       doc.relativePath,
     );
+    status.value = cleanOutput;
+    appendAppLog("LaTeX/PDF", `清理构建产物：${doc.relativePath}`, cleanOutput);
     await refreshWorkspace();
   }
 
@@ -3492,19 +3752,85 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
   }
 
 
+  function exportProfileForFormat(format: ExportProfile["format"]) {
+    const requested = projectSettings.value.pandocProfileId || format;
+    return exportProfiles.value.find((profile) => profile.id === requested && profile.format === format)
+      || exportProfiles.value.find((profile) => profile.format === format)
+      || defaultExportProfiles().find((profile) => profile.format === format);
+  }
+
+  async function updateExportProfile(profile: ExportProfile) {
+    const next = exportProfiles.value.slice();
+    const index = next.findIndex((item) => item.id === profile.id);
+    if (index >= 0) next[index] = { ...next[index], ...profile };
+    else next.push(profile);
+    exportProfiles.value = next;
+    await persistProjectSettings();
+    await persist();
+  }
+
+  async function updatePublishProfile(profile: PublishProfile) {
+    const current = projectSettings.value.publishing?.profiles || defaultPublishProfiles();
+    const next = current.slice();
+    const index = next.findIndex((item) => item.id === profile.id);
+    if (index >= 0) next[index] = { ...next[index], ...profile };
+    else next.push(profile);
+    projectSettings.value = {
+      ...projectSettings.value,
+      publishing: {
+        ...(projectSettings.value.publishing || {}),
+        activeProfileId: profile.id,
+        profiles: next,
+      },
+    };
+    await persistProjectSettings();
+    await persist();
+  }
+
+  async function saveCustomSnippets(snippets: CustomSnippet[]) {
+    customSnippets.value = snippets
+      .filter((item) => item.trigger.trim() && item.insert.trim())
+      .map((item) => ({ ...item, updatedAt: item.updatedAt || nowIso() }));
+    if (workspace.value?.localDir) {
+      await writeWorkspaceFile(
+        workspace.value.localDir,
+        '.paper-notes/snippets.json',
+        `${JSON.stringify(customSnippets.value, null, 2)}\n`,
+      );
+      await refreshWorkspace();
+    }
+    status.value = `已保存 ${customSnippets.value.length} 个自定义片段。`;
+    await persist();
+  }
+
   async function exportMarkdownFormat(format: 'pdf' | 'docx' | 'html' | 'epub' | 'latex' | 'beamer') {
     const doc = activeDocument.value;
     if (!workspace.value?.localDir || !doc?.relativePath || doc.kind !== 'markdown') {
       throw new Error('多格式导出需要打开工作区内的 Markdown 文件。');
     }
+    const exportTargetPath = projectSettings.value.mainMarkdownFile || doc.relativePath!;
     const result = await runExclusive('pandoc-export', 'Pandoc 导出', async () => {
       status.value = `正在导出 ${format.toUpperCase()}…`;
-      const targetPath = projectSettings.value.mainMarkdownFile || doc.relativePath!;
-      projectSettings.value = { ...projectSettings.value, exportProfile: format, pandocProfileId: format };
-      await persistProjectSettings();
-      return exportMarkdownPandocFile(workspace.value!.localDir, targetPath, format, toolPaths.value);
+      const targetPath = exportTargetPath;
+      const profile = exportProfileForFormat(format);
+      projectSettings.value = {
+        ...projectSettings.value,
+        exportProfile: format,
+        pandocProfileId: profile?.id || format,
+      };
+      if (profile) {
+        await updateExportProfile({ ...profile, lastUsedAt: nowIso() });
+      } else {
+        await persistProjectSettings();
+      }
+      return exportMarkdownPandocFile(workspace.value!.localDir, targetPath, format, toolPaths.value, profile);
     });
     if (!result) return;
+    appendAppLog(
+      "Pandoc 导出",
+      result.ok ? `${format.toUpperCase()} 导出成功：${result.pdfPath || exportTargetPath}` : `${format.toUpperCase()} 导出失败：${exportTargetPath}`,
+      `${result.command}\n\n${result.log}`,
+    );
     latexResult.value = result;
     if (result.ok) {
       status.value = `已导出：${result.pdfPath || format.toUpperCase()}`;
@@ -3514,6 +3840,126 @@ ${yamlList(claims.map((claim) => `${claim}：补充来源、图表或引用`))}
     } else {
       status.value = result.log || '已取消导出。';
     }
+  }
+
+  async function publishActiveMarkdown(profileId?: string) {
+    const doc = activeDocument.value;
+    if (!workspace.value?.localDir || !doc?.relativePath || doc.kind !== 'markdown') {
+      throw new Error('发布 profile 需要打开工作区内的 Markdown 文件。');
+    }
+    const profiles = projectSettings.value.publishing?.profiles || defaultPublishProfiles();
+    const id = profileId || projectSettings.value.publishing?.activeProfileId || profiles[0]?.id;
+    const profile = profiles.find((item) => item.id === id) || profiles[0];
+    if (!profile) throw new Error('没有可用的发布 profile。');
+    await saveActiveLocal();
+    const result = await runExclusive('publish-profile', '发布 profile', async () => {
+      status.value = `正在生成 ${profile.name}…`;
+      return publishMarkdownProfile(workspace.value!.localDir, doc.relativePath!, profile);
+    });
+    if (!result) return;
+    lastPackageExport.value = result;
+    appendPackageLog("发布", result);
+    status.value = result.ok ? `已生成发布内容：${result.outputDir}` : `发布内容已生成，但有资源跳过：${result.outputDir}`;
+    await refreshWorkspace();
+  }
+
+  async function choosePackageExportRoot(label: string) {
+    status.value = `请选择${label}的导出位置…`;
+    const outputRoot = await pickLocalFolder();
+    if (!outputRoot) {
+      status.value = `已取消${label}。`;
+      return null;
+    }
+    return outputRoot;
+  }
+
+  async function exportSubmissionPackageAction() {
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
+    const activeRelative = activeDocument.value?.relativePath;
+    const activeLatex = activeDocument.value?.kind === 'latex' ? activeRelative : undefined;
+    const activeMarkdown = activeDocument.value?.kind === 'markdown' ? activeRelative : undefined;
+    const mainTex = activeLatex || projectSettings.value.mainTexFile;
+    const mainMarkdown = mainTex ? undefined : (projectSettings.value.mainMarkdownFile || activeMarkdown);
+    if (!mainTex && !mainMarkdown) {
+      throw new Error('投稿包导出需要打开当前 TeX 文件，或在项目设置中指定主 TeX 文件。');
+    }
+    await saveActiveLocal();
+    const outputRoot = await choosePackageExportRoot('投稿包导出');
+    if (!outputRoot) return;
+    const result = await runExclusive('submission-package', '投稿包导出', async () => {
+      status.value = mainTex ? `正在按依赖收集导出投稿包：${mainTex}…` : `正在导出 Markdown 投稿包：${mainMarkdown}…`;
+      return exportSubmissionPackage(
+        workspace.value!.localDir,
+        mainTex,
+        mainMarkdown,
+        pdfPreviewPath.value,
+        outputRoot,
+      );
+    });
+    if (!result) return;
+    lastPackageExport.value = result;
+    appendPackageLog("投稿包导出", result);
+    status.value = `已导出投稿包：${result.outputDir}`;
+    await refreshWorkspace();
+  }
+
+  async function exportSharedReviewPackageAction() {
+    if (!workspace.value?.localDir) throw new Error('请先打开一个本地文件夹或 GitHub 工作区。');
+    const outputRoot = await choosePackageExportRoot('共享审阅包导出');
+    if (!outputRoot) return;
+    await saveAnnotations();
+    const includeResolved = !!projectSettings.value.collaboration?.includeResolvedAnnotations;
+    const result = await runExclusive('shared-review-package', '共享审阅包导出', async () => {
+      status.value = '正在导出共享审阅包…';
+      return exportSharedReviewPackage(workspace.value!.localDir, pdfPreviewPath.value, includeResolved, outputRoot);
+    });
+    if (!result) return;
+    lastPackageExport.value = result;
+    appendPackageLog("共享审阅包导出", result);
+    status.value = `已导出共享审阅包：${result.outputDir}`;
+    await refreshWorkspace();
+  }
+
+  async function openExportedPackageFolder(path: string) {
+    const target = path?.trim();
+    if (!target) return;
+    await openTauriPath(target);
+    status.value = `已打开导出文件夹：${target}`;
+    appendAppLog("导出", `已打开导出文件夹：${target}`);
+  }
+
+  async function gitPullWorkspace() {
+    if (!workspace.value?.localDir) throw new Error('请先打开 Git 工作区。');
+    const result = await runExclusive('git-pull', 'Git Pull', async () => {
+      status.value = '正在 pull，并检测冲突…';
+      return gitPullWithConflictStatus(workspace.value!.localDir, workspace.value!.branch || 'main', githubToken.value || undefined);
+    });
+    if (!result) return;
+    lastGitSyncResult.value = result;
+    appendAppLog(
+      "Git Pull",
+      result.ok ? "完成" : `完成但存在 ${result.conflictedFiles.length} 个冲突/错误`,
+      `${result.command}\n\n${result.log}${result.conflictedFiles.length ? `\n\nConflicts:\n${result.conflictedFiles.join("\n")}` : ""}`,
+    );
+    status.value = result.ok ? 'Git pull 完成。' : `Git pull 完成但存在 ${result.conflictedFiles.length} 个冲突。`;
+    await refreshWorkspace();
+  }
+
+  async function gitPushWorkspace() {
+    if (!workspace.value?.localDir) throw new Error('请先打开 Git 工作区。');
+    const result = await runExclusive('git-push', 'Git Push', async () => {
+      status.value = '正在 push 当前分支…';
+      return gitPushCurrentBranch(workspace.value!.localDir, workspace.value!.branch || 'main', githubToken.value || undefined);
+    });
+    if (!result) return;
+    lastGitSyncResult.value = result;
+    appendAppLog(
+      "Git Push",
+      result.ok ? "完成" : `未完成：${result.conflictedFiles.length} 个冲突/错误`,
+      `${result.command}\n\n${result.log}${result.conflictedFiles.length ? `\n\nConflicts:\n${result.conflictedFiles.join("\n")}` : ""}`,
+    );
+    status.value = result.ok ? 'Git push 完成。' : `Git push 未完成：${result.conflictedFiles.length} 个冲突/错误。`;
+    await refreshGitStatus();
   }
 
 
@@ -3873,6 +4319,7 @@ ${yamlList(context.recentBib)}
     latexBusy,
     workspaceBusy,
     githubToken,
+    githubLogin,
     githubUserHint,
     commentAuthorName,
     darkMode,
@@ -3882,6 +4329,7 @@ ${yamlList(context.recentBib)}
     busy,
     status,
     error,
+    appLog,
     latexResult,
     pdfPreviewUrl,
     pdfPreviewPath,
@@ -3901,7 +4349,15 @@ ${yamlList(context.recentBib)}
     layoutSettings,
     projectSettings,
     exportProfiles,
+    customSnippets,
+    lastPackageExport,
+    lastGitSyncResult,
     researchFlowStatuses,
+    aiGroundingMode,
+    aiMessages,
+    aiIndexStats,
+    aiEvidencePack,
+    aiProposedPatches,
     recoveryWarning,
     draftCount,
     activeDocumentDiagnostics,
@@ -3925,6 +4381,9 @@ ${yamlList(context.recentBib)}
     persistProjectSettings,
     setProjectSetting,
     updateResearchFlowPath,
+    updateExportProfile,
+    updatePublishProfile,
+    saveCustomSnippets,
     startGuidedWorkflow,
     openSampleWorkspace,
     openResearchFlowEntry,
@@ -3932,6 +4391,9 @@ ${yamlList(context.recentBib)}
     forgetGithubToken,
     cloneWorkspace,
     setCommentAuthorName,
+    setAiGroundingMode,
+    refreshAiFrameworkIndex,
+    sendAiFrameworkPrompt,
     openLocalEntry,
     openLocalFolder,
     openLocalFile,
@@ -3969,6 +4431,12 @@ ${yamlList(context.recentBib)}
     exportAnnotations,
     convertAnnotationToTask,
     exportMarkdownFormat,
+    publishActiveMarkdown,
+    exportSubmissionPackageAction,
+    exportSharedReviewPackageAction,
+    openExportedPackageFolder,
+    gitPullWorkspace,
+    gitPushWorkspace,
     createProjectFromTemplate,
     createDailyNote,
     createWeeklyReport,

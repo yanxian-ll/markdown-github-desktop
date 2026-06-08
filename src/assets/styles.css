@@ -4423,3 +4423,381 @@ button.mini {
   border-color: rgba(96, 165, 250, 0.28);
 }
 
+
+/* v0.10.14: bottom AI evidence-writing dock framework. */
+.ai-dock-reveal-grip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 32px;
+  height: 12px;
+  z-index: 75;
+  cursor: row-resize;
+}
+.ai-dock-reveal-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 120px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.28);
+}
+.ai-dock-reveal-grip:hover::after {
+  background: var(--accent);
+}
+.ai-dock-panel {
+  z-index: 92;
+}
+.ai-dock-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-grounding-pill,
+.ai-citation-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 320px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.1);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-dock-body {
+  padding: 0;
+}
+.ai-chat-layout,
+.ai-evidence-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.ai-context-card,
+.ai-evidence-summary,
+.ai-evidence-pack-card,
+.ai-diff-layout,
+.ai-settings-layout {
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+.ai-context-card,
+.ai-evidence-summary {
+  border-right: 1px solid var(--border);
+  background: rgba(127, 127, 127, 0.04);
+}
+.ai-context-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  line-height: 1.5;
+}
+.ai-context-card select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--panel-2);
+}
+.ai-mode-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 202, 107, 0.38);
+  border-radius: 10px;
+  color: var(--warn);
+  background: rgba(255, 202, 107, 0.08);
+}
+.ai-chat-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+.ai-message-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-message {
+  max-width: min(860px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(127, 127, 127, 0.05);
+}
+.ai-message.user {
+  align-self: flex-end;
+  background: rgba(96, 165, 250, 0.12);
+}
+.ai-message.assistant {
+  align-self: flex-start;
+}
+.ai-message header,
+.ai-evidence-summary header,
+.ai-patch-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.ai-message p,
+.ai-evidence-item p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.ai-citation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ai-missing-evidence {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: rgba(255, 202, 107, 0.08);
+}
+.ai-missing-evidence ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+.ai-prompt-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.ai-prompt-box textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--text);
+  background: #0b0f19;
+  font: inherit;
+  outline: none;
+}
+.light .ai-prompt-box textarea {
+  background: #fff;
+}
+.ai-prompt-box textarea:focus {
+  border-color: var(--accent);
+}
+.ai-prompt-box button {
+  align-self: end;
+}
+.ai-evidence-summary {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+.ai-evidence-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+.ai-stat-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.ai-stat-card strong {
+  display: block;
+  font-size: 18px;
+}
+.ai-stat-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ai-evidence-pack-list {
+  display: grid;
+  gap: 8px;
+}
+.ai-evidence-item,
+.ai-patch-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.04);
+}
+.ai-patch-card pre {
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #0b0f19;
+}
+.light .ai-patch-card pre {
+  background: #f5f7fb;
+}
+@media (max-width: 920px) {
+  .ai-chat-layout,
+  .ai-evidence-layout {
+    grid-template-columns: 1fr;
+  }
+  .ai-context-card,
+  .ai-evidence-summary {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* v0.10.15: unified bottom dock for problems/output/log and AI evidence workflow. */
+.bottom-dock-panel {
+  z-index: 92;
+}
+.bottom-dock-header {
+  min-width: 0;
+}
+.bottom-dock-tabs {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.bottom-dock-tabs button {
+  white-space: nowrap;
+}
+.bottom-dock-tabs button.error:not(.active) {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.38);
+}
+.bottom-dock-tab-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 3px 4px;
+  background: var(--border);
+}
+.bottom-dock-body {
+  padding: 0;
+}
+.bottom-dock-body > .problem-list,
+.bottom-dock-body > .build-log {
+  padding: 8px 10px;
+}
+.bottom-dock-reveal-grip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 32px;
+  height: 12px;
+  z-index: 75;
+  cursor: row-resize;
+}
+.bottom-dock-reveal-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 120px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.28);
+}
+.bottom-dock-reveal-grip:hover::after {
+  background: var(--accent);
+}
+
+.plotly-preview,
+.tikz-preview {
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25));
+  border-radius: 12px;
+  padding: 12px;
+  margin: 14px 0;
+  background: var(--panel-muted, rgba(148, 163, 184, 0.08));
+  overflow: auto;
+}
+
+.plotly-preview svg {
+  width: 100%;
+  max-height: 320px;
+}
+
+.plotly-preview rect,
+.plotly-preview circle {
+  fill: currentColor;
+  opacity: 0.72;
+}
+
+.tikz-preview.loading::before {
+  content: 'TikZ 正在编译预览…';
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted-text, #64748b);
+}
+
+.tikz-preview-object {
+  width: 100%;
+  min-height: 260px;
+  border: 0;
+}
+
+
+.path-link {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.path-link:hover {
+  text-decoration: underline;
+}
+
+.export-profile-card,
+.snippet-editor {
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25));
+  border-radius: 12px;
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--panel-muted, rgba(148, 163, 184, 0.06));
+}
+
+.compact-form label {
+  gap: 4px;
+}
+
+.checkbox-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.conflict-list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+}

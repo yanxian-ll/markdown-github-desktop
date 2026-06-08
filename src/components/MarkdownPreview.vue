@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import mermaid from 'mermaid';
 import { renderMarkdown } from '../services/markdown';
-import { readWorkspaceDataUrl } from '../services/tauriBridge';
+import { compileTikzPreview, readWorkspaceDataUrl } from '../services/tauriBridge';
 import type { MarkdownRenderPreset, PaperAnnotation, PaperAnnotationRect } from '../types/app';
 
 const props = defineProps<{
@@ -267,6 +267,87 @@ async function renderMermaid(root: HTMLElement, token: number) {
   }
 }
 
+function decodePreviewData(value?: string) {
+  try { return decodeURIComponent(value || ''); } catch { return value || ''; }
+}
+
+function numericArray(value: unknown): number[] {
+  return Array.isArray(value) ? value.map((item) => Number(item)).filter((item) => Number.isFinite(item)) : [];
+}
+
+function renderSimplePlotlySvg(raw: string) {
+  let config: any = {};
+  try { config = JSON.parse(raw); } catch {
+    return `<pre>${raw.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`;
+  }
+  const traces = Array.isArray(config.data) ? config.data : Array.isArray(config) ? config : [config];
+  const width = 520;
+  const height = 280;
+  const pad = 36;
+  const points: Array<{ x: number; y: number; type: string }> = traces.flatMap((trace: any) => {
+    const y = numericArray(trace.y);
+    const x = numericArray(trace.x).length === y.length ? numericArray(trace.x) : y.map((_: number, index: number) => index + 1);
+    return y.map((value: number, index: number) => ({ x: x[index], y: value, type: trace.type || 'scatter' }));
+  });
+  if (!points.length) return '<p class="hint">Plotly JSON 中没有可绘制的数据。</p>';
+  const minX = Math.min(...points.map((p) => p.x));
+  const maxX = Math.max(...points.map((p) => p.x));
+  const minY = Math.min(...points.map((p) => p.y));
+  const maxY = Math.max(...points.map((p) => p.y));
+  const sx = (x: number) => pad + ((x - minX) / Math.max(1e-9, maxX - minX)) * (width - pad * 2);
+  const sy = (y: number) => height - pad - ((y - minY) / Math.max(1e-9, maxY - minY)) * (height - pad * 2);
+  const shapes = traces.map((trace: any) => {
+    const y = numericArray(trace.y);
+    const x = numericArray(trace.x).length === y.length ? numericArray(trace.x) : y.map((_: number, index: number) => index + 1);
+    if (!y.length) return '';
+    if (trace.type === 'bar') {
+      const barWidth = Math.max(4, (width - pad * 2) / Math.max(1, y.length) * 0.55);
+      return y.map((value, index) => {
+        const top = sy(value);
+        const bottom = sy(Math.min(0, minY));
+        return `<rect x="${sx(x[index]) - barWidth / 2}" y="${Math.min(top, bottom)}" width="${barWidth}" height="${Math.max(1, Math.abs(bottom - top))}" />`;
+      }).join('');
+    }
+    const d = y.map((value, index) => `${index ? 'L' : 'M'}${sx(x[index]).toFixed(1)},${sy(value).toFixed(1)}`).join(' ');
+    const circles = y.map((value, index) => `<circle cx="${sx(x[index]).toFixed(1)}" cy="${sy(value).toFixed(1)}" r="2.5" />`).join('');
+    return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2" />${circles}`;
+  }).join('');
+  const title = config.layout?.title?.text || config.layout?.title || 'Plotly preview';
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${String(title).replace(/"/g, '&quot;')}"><text x="${pad}" y="22">${String(title).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</text><line x1="${pad}" y1="${height-pad}" x2="${width-pad}" y2="${height-pad}" stroke="currentColor"/><line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height-pad}" stroke="currentColor"/>${shapes}</svg>`;
+}
+
+async function renderPlotlyCharts(root: HTMLElement, token: number) {
+  if (!html.value.includes('plotly-preview')) return;
+  await nextTick();
+  if (token !== assetRenderToken) return;
+  for (const node of Array.from(root.querySelectorAll<HTMLElement>('.plotly-preview'))) {
+    const raw = decodePreviewData(node.dataset.chart);
+    node.innerHTML = renderSimplePlotlySvg(raw);
+  }
+}
+
+async function renderTikzBlocks(root: HTMLElement, token: number) {
+  if (!props.rootDir || !props.currentPath || !html.value.includes('tikz-preview')) return;
+  await nextTick();
+  if (token !== assetRenderToken) return;
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('.tikz-preview'));
+  for (const node of nodes) {
+    const raw = decodePreviewData(node.dataset.tikz);
+    node.classList.add('loading');
+    try {
+      const dataUrl = await compileTikzPreview(props.rootDir, props.currentPath, raw);
+      if (token !== assetRenderToken) return;
+      node.classList.remove('loading');
+      node.innerHTML = `<object type="application/pdf" data="${dataUrl}" class="tikz-preview-object"><a href="${dataUrl}">打开 TikZ PDF 预览</a></object>`;
+    } catch (error) {
+      if (token !== assetRenderToken) return;
+      node.classList.remove('loading');
+      const message = error instanceof Error ? error.message : String(error);
+      node.innerHTML = `<p class="warning-text">TikZ 预览失败：${message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p><pre>${raw.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`;
+    }
+  }
+}
+
 async function renderLocalImages(root: HTMLElement, token: number) {
   if (!props.rootDir || !props.currentPath || !html.value.includes('<img')) return;
   await nextTick();
@@ -293,6 +374,8 @@ async function refreshPreviewAssets() {
   if (!root) return;
   const token = ++assetRenderToken;
   await renderMermaid(root, token);
+  await renderPlotlyCharts(root, token);
+  await renderTikzBlocks(root, token);
   await renderLocalImages(root, token);
 }
 

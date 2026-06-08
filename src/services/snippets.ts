@@ -12,7 +12,7 @@ export const editorSnippets: EditorSnippet[] = [
     label: 'fig',
     detail: 'LaTeX figure 环境',
     language: 'latex',
-    insert: '\\begin{figure}[htbp]\n  \\centering\n  \\includegraphics[width=0.9\\linewidth]{figures/filename}\n  \\caption{Caption}\n  \\label{fig:label}\n\\end{figure}',
+    insert: '\\begin{figure}[htbp]\n  \\centering\n  \\includegraphics[width=${1:0.9}\\linewidth]{${2:figures/filename}}\n  \\caption{Caption}\n  \\label{fig:label}\n\\end{figure}',
   },
   {
     trigger: 'table',
@@ -68,7 +68,7 @@ export const editorSnippets: EditorSnippet[] = [
     label: '/todo',
     detail: 'Markdown TODO',
     language: 'markdown',
-    insert: '- [ ] TODO: ',
+    insert: '- [ ] TODO: ${1:task}',
   },
   {
     trigger: '/note',

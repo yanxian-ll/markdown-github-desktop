@@ -2291,7 +2291,7 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "markdown-latex-git-desktop"
-version = "0.10.13"
+version = "0.10.20"
 dependencies = [
  "keyring",
  "rfd",

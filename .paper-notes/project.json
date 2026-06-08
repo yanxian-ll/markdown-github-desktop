@@ -15,6 +15,35 @@
     "paperOutline": "paper/paper-outline.md",
     "reviewSummary": ".paper-notes/review-summary.md"
   },
+  "publishing": {
+    "activeProfileId": "hugo-default",
+    "profiles": [
+      {
+        "id": "hugo-default",
+        "name": "Hugo 内容包",
+        "engine": "hugo",
+        "contentDir": "publication/hugo/content/posts",
+        "assetDir": "publication/hugo/static/assets",
+        "frontmatterMode": "yaml",
+        "resourceStrategy": "copy-local",
+        "draft": true
+      },
+      {
+        "id": "jekyll-default",
+        "name": "Jekyll 文章",
+        "engine": "jekyll",
+        "contentDir": "publication/jekyll/_posts",
+        "assetDir": "publication/jekyll/assets",
+        "frontmatterMode": "yaml",
+        "resourceStrategy": "copy-local",
+        "draft": true
+      }
+    ]
+  },
+  "collaboration": {
+    "includeSourceContext": true,
+    "includeResolvedAnnotations": false
+  },
   "mainMarkdownFile": "README.md",
   "mainTexFile": "isprs-archives-annals-full-paper/main.tex"
 }

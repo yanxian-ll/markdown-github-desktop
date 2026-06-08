@@ -19,6 +19,10 @@ import 'prismjs/components/prism-rust';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 
+function encodeDataAttribute(value: string): string {
+  return encodeURIComponent(value);
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -117,6 +121,8 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
   if (language === 'mermaid') return `<pre class="mermaid">${escapeHtml(token.content)}</pre>`;
+  if (['plotly', 'plotly-json', 'chart'].includes(language || '')) return `<div class="plotly-preview" data-chart="${encodeDataAttribute(token.content)}"><pre>${escapeHtml(token.content)}</pre></div>`;
+  if (language === 'tikz') return `<div class="tikz-preview" data-tikz="${encodeDataAttribute(token.content)}"><pre>${escapeHtml(token.content)}</pre></div>`;
   if (LATEX_FENCE_TYPES.has(language)) return renderLatexFence(language, token.content);
   return defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
 };

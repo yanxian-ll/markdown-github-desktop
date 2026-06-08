@@ -2,6 +2,7 @@ use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::{HashSet, VecDeque},
     env,
     fs,
     path::{Component, Path, PathBuf},
@@ -85,6 +86,55 @@ struct ToolPathOverrides {
     latexmk: Option<String>,
     synctex: Option<String>,
     git: Option<String>,
+}
+
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PandocExportProfile {
+    id: Option<String>,
+    name: Option<String>,
+    format: Option<String>,
+    args: Option<Vec<String>>,
+    output_dir: Option<String>,
+    csl: Option<String>,
+    bibliography: Option<String>,
+    reference_doc: Option<String>,
+    resource_paths: Option<Vec<String>>,
+    citeproc: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishProfile {
+    id: String,
+    name: String,
+    engine: String,
+    content_dir: String,
+    asset_dir: String,
+    frontmatter_mode: String,
+    resource_strategy: String,
+    draft: Option<bool>,
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageExportResult {
+    ok: bool,
+    output_dir: String,
+    copied_files: Vec<String>,
+    skipped_files: Vec<String>,
+    manifest_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitSyncResult {
+    ok: bool,
+    command: String,
+    log: String,
+    conflicted_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1465,7 +1515,7 @@ fn pandoc_output_extension(format: &str) -> Result<&'static str, String> {
     }
 }
 
-fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
+fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>, profile: Option<PandocExportProfile>) -> Result<LatexBuildResult, String> {
     let root = PathBuf::from(root_dir);
     let md_path = safe_join(&root, &relative_path)?;
     if !md_path.exists() {
@@ -1478,10 +1528,12 @@ fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, form
     fs::create_dir_all(&build_dir).map_err(|error| format!("无法创建 Pandoc 构建目录：{error}"))?;
     let temp_path = build_dir.join(format!("{stem}.export.md"));
     fs::write(&temp_path, preprocess_markdown_latex_blocks(&source)).map_err(|error| format!("无法写入 Pandoc 临时文件：{error}"))?;
+    let profile = profile.unwrap_or_default();
     let ext = pandoc_output_extension(&format)?;
     let default_name = format!("{stem}.{ext}");
+    let output_dir = profile.output_dir.as_deref().filter(|value| !value.trim().is_empty()).map(|value| safe_join(&root, value)).transpose()?.unwrap_or_else(|| work_dir.to_path_buf());
     let Some(output_path) = rfd::FileDialog::new()
-        .set_directory(work_dir)
+        .set_directory(output_dir)
         .set_file_name(&default_name)
         .save_file() else {
             return Ok(LatexBuildResult { ok: false, command: "pandoc export canceled".into(), pdf_path: None, log: "已取消导出。".into(), diagnostics: vec![] });
@@ -1501,6 +1553,26 @@ fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, form
     } else if format == "latex" || format == "tex" {
         cmd.args(["-t", "latex"]);
     }
+    if profile.citeproc.unwrap_or(false) || profile.bibliography.as_deref().map(|value| !value.trim().is_empty()).unwrap_or(false) {
+        cmd.arg("--citeproc");
+    }
+    if let Some(bibliography) = profile.bibliography.as_deref().filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--bibliography={bibliography}"));
+    }
+    if let Some(csl) = profile.csl.as_deref().filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--csl={csl}"));
+    }
+    if let Some(reference_doc) = profile.reference_doc.as_deref().filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--reference-doc={reference_doc}"));
+    }
+    for resource_path in profile.resource_paths.unwrap_or_default().into_iter().filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--resource-path={resource_path}"));
+    }
+    for arg in profile.args.unwrap_or_default().into_iter().filter(|value| !value.trim().is_empty()) {
+        if format == "beamer" && arg == "-t" { continue; }
+        if format == "beamer" && arg == "beamer" { continue; }
+        cmd.arg(arg);
+    }
     cmd.arg("-o").arg(&output_path);
     let output = cmd.output().map_err(|error| format!("无法执行 pandoc。请先安装 Pandoc 并配置 PATH：{error}"))?;
     let log = format!("$ {} {} -o {}\n{}{}", pandoc, md_path.display(), output_path.display(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
@@ -1514,10 +1586,858 @@ fn export_markdown_pandoc_blocking(root_dir: String, relative_path: String, form
 }
 
 #[tauri::command]
-async fn export_markdown_pandoc(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
-    tauri::async_runtime::spawn_blocking(move || export_markdown_pandoc_blocking(root_dir, relative_path, format, tool_paths))
+async fn export_markdown_pandoc(root_dir: String, relative_path: String, format: String, tool_paths: Option<ToolPathOverrides>, profile: Option<PandocExportProfile>) -> Result<LatexBuildResult, String> {
+    tauri::async_runtime::spawn_blocking(move || export_markdown_pandoc_blocking(root_dir, relative_path, format, tool_paths, profile))
         .await
         .map_err(|error| format!("Pandoc 导出后台任务失败：{error}"))?
+}
+
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string().chars().take(80).collect::<String>()
+}
+
+fn strip_yaml_frontmatter(markdown: &str) -> String {
+    let normalized = markdown.replace("\r\n", "\n");
+    let mut lines = normalized.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return markdown.to_string();
+    }
+    let mut body_started = false;
+    let mut body = Vec::new();
+    for line in lines {
+        if !body_started && line.trim() == "---" {
+            body_started = true;
+            continue;
+        }
+        if body_started {
+            body.push(line);
+        }
+    }
+    if body_started { body.join("\n").trim_start().to_string() } else { markdown.to_string() }
+}
+
+fn markdown_title(markdown: &str, fallback: &str) -> String {
+    markdown.lines()
+        .find_map(|line| line.trim().strip_prefix("# ").map(|value| value.trim().to_string()))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn extract_markdown_image_targets(markdown: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let bytes = markdown.as_bytes();
+    let mut index = 0usize;
+    while index + 3 < bytes.len() {
+        if bytes[index] == b'!' && bytes[index + 1] == b'[' {
+            if let Some(close_bracket) = markdown[index + 2..].find("](") {
+                let start = index + 2 + close_bracket + 2;
+                if let Some(close_paren) = markdown[start..].find(')') {
+                    let raw = markdown[start..start + close_paren].trim();
+                    let cleaned = raw.split_whitespace().next().unwrap_or(raw).trim_matches('"').trim_matches('\'');
+                    if !cleaned.is_empty() && !cleaned.starts_with("http://") && !cleaned.starts_with("https://") && !cleaned.starts_with("data:") {
+                        targets.push(cleaned.to_string());
+                    }
+                    index = start + close_paren + 1;
+                    continue;
+                }
+            }
+        }
+        index += 1;
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn workspace_asset_relative(current_relative_path: &str, asset_src: &str) -> String {
+    let cleaned = asset_src
+        .split('#').next().unwrap_or(asset_src)
+        .split('?').next().unwrap_or(asset_src)
+        .replace("%20", " ")
+        .replace('\\', "/");
+    if cleaned.starts_with('/') {
+        cleaned.trim_start_matches('/').to_string()
+    } else {
+        let base = Path::new(current_relative_path).parent().and_then(|value| value.to_str()).unwrap_or("").replace('\\', "/");
+        if base.is_empty() { cleaned } else { format!("{base}/{cleaned}") }
+    }
+}
+
+fn public_asset_path(asset_dir: &str, file_name: &str) -> String {
+    let normalized = asset_dir.replace('\\', "/");
+    if let Some((_, tail)) = normalized.split_once("static/") {
+        format!("/{}/{}", tail.trim_matches('/'), file_name)
+    } else {
+        let last = normalized.split('/').filter(|part| !part.is_empty()).last().unwrap_or("assets");
+        format!("/{last}/{file_name}")
+    }
+}
+
+fn write_package_manifest(output_dir: &Path, title: &str, copied: &[String], skipped: &[String], notes: &[String]) -> Result<String, String> {
+    let manifest_path = output_dir.join("README.md");
+    let mut lines = vec![
+        format!("# {title}"),
+        String::new(),
+        format!("- Generated by Scholia Studio at UNIX timestamp `{}`.", safe_timestamp()),
+        format!("- Copied files: {}", copied.len()),
+        format!("- Skipped files: {}", skipped.len()),
+        String::new(),
+    ];
+    if !notes.is_empty() {
+        lines.push("## Notes".into());
+        lines.push(String::new());
+        lines.extend(notes.iter().map(|item| format!("- {item}")));
+        lines.push(String::new());
+    }
+    lines.push("## Copied files".into());
+    lines.push(String::new());
+    if copied.is_empty() { lines.push("- None".into()); } else { lines.extend(copied.iter().map(|item| format!("- `{item}`"))); }
+    lines.push(String::new());
+    lines.push("## Skipped files".into());
+    lines.push(String::new());
+    if skipped.is_empty() { lines.push("- None".into()); } else { lines.extend(skipped.iter().map(|item| format!("- `{item}`"))); }
+    fs::create_dir_all(output_dir).map_err(|error| format!("无法创建导出目录：{error}"))?;
+    fs::write(&manifest_path, lines.join("\n")).map_err(|error| format!("无法写入 manifest：{error}"))?;
+    Ok(manifest_path.to_string_lossy().to_string())
+}
+
+fn copy_relative_file(root: &Path, relative: &str, output_dir: &Path, copied: &mut Vec<String>, skipped: &mut Vec<String>) {
+    let normalized = relative.trim().replace('\\', "/").trim_start_matches('/').to_string();
+    if normalized.is_empty() { return; }
+    let Ok(source) = safe_join(root, &normalized) else { skipped.push(normalized); return; };
+    if !source.is_file() { skipped.push(normalized); return; }
+    let target = output_dir.join(&normalized);
+    if let Some(parent) = target.parent() {
+        if let Err(error) = fs::create_dir_all(parent) {
+            skipped.push(format!("{normalized} ({error})"));
+            return;
+        }
+    }
+    match fs::copy(&source, &target) {
+        Ok(_) => copied.push(normalized),
+        Err(error) => skipped.push(format!("{normalized} ({error})")),
+    }
+}
+
+fn collect_package_files(base: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), String> {
+    let entries = fs::read_dir(base).map_err(|error| format!("无法读取目录 {}：{error}", base.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("无法读取目录项：{error}"))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let relative = normalized_relative(root, &path);
+        if name == ".git" || name == "node_modules" || name == "target" { continue; }
+        if relative.starts_with(".paper-notes/trash/")
+            || relative.starts_with(".paper-notes/backups/")
+            || relative.starts_with(".paper-notes/snapshots/")
+            || relative.starts_with(".paper-notes/submission-packages/")
+            || relative.starts_with(".paper-notes/shared-review-packages/")
+            || relative.starts_with("publication/") {
+            continue;
+        }
+        let meta = entry.metadata().map_err(|error| format!("无法读取元数据：{error}"))?;
+        if meta.is_dir() {
+            collect_package_files(&path, root, out)?;
+        } else if meta.is_file() {
+            let ext = extension_lower(&path);
+            if matches!(ext.as_str(), "tex" | "ltx" | "bib" | "cls" | "sty" | "bst" | "bbx" | "cbx" | "cfg" | "def" | "clo" | "ldf" | "ist" | "ins" | "dtx" | "md" | "markdown" | "png" | "jpg" | "jpeg" | "pdf" | "eps" | "svg") {
+                out.push(relative);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_latex_path(value: &str) -> Option<String> {
+    let mut cleaned = value
+        .trim()
+        .trim_matches('{')
+        .trim_matches('}')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace("\\", "/")
+        .replace("%20", " ");
+    if let Some((head, _)) = cleaned.split_once('#') {
+        cleaned = head.to_string();
+    }
+    if let Some((head, _)) = cleaned.split_once('?') {
+        cleaned = head.to_string();
+    }
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty()
+        || cleaned.starts_with("http://")
+        || cleaned.starts_with("https://")
+        || cleaned.starts_with("data:")
+        || cleaned.starts_with("mailto:")
+        || cleaned.contains("$") {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn strip_latex_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.replace("\r\n", "\n").lines() {
+        let mut previous_backslashes = 0usize;
+        for ch in line.chars() {
+            if ch == '%' && previous_backslashes % 2 == 0 {
+                break;
+            }
+            out.push(ch);
+            if ch == '\\' {
+                previous_backslashes += 1;
+            } else {
+                previous_backslashes = 0;
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn is_ascii_command_char(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'@'
+}
+
+fn skip_latex_space_options(source: &str, mut index: usize) -> usize {
+    let bytes = source.as_bytes();
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    if index < bytes.len() && bytes[index] == b'*' {
+        index += 1;
+    }
+    loop {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'[' {
+            break;
+        }
+        index += 1;
+        let mut depth = 1usize;
+        while index < bytes.len() && depth > 0 {
+            match bytes[index] {
+                b'[' => depth += 1,
+                b']' => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+    index
+}
+
+fn read_latex_braced_arg(source: &str, mut index: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    if index >= bytes.len() || bytes[index] != b'{' {
+        return None;
+    }
+    index += 1;
+    let start = index;
+    let mut depth = 1usize;
+    while index < bytes.len() && depth > 0 {
+        match bytes[index] {
+            b'\\' => {
+                index = (index + 2).min(bytes.len());
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 {
+            let arg = source[start..index].trim().to_string();
+            return Some((arg, index + 1));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn extract_latex_command_args(source: &str, command: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut index = 0usize;
+    let command_bytes = command.as_bytes();
+    while let Some(offset) = source[index..].find(command) {
+        let pos = index + offset;
+        let after = pos + command.len();
+        let bytes = source.as_bytes();
+        if after < bytes.len() && is_ascii_command_char(bytes[after]) {
+            index = after;
+            continue;
+        }
+        if pos > 0 && bytes[pos - 1] == b'\\' && !command_bytes.starts_with(b"\\") {
+            index = after;
+            continue;
+        }
+        let arg_start = skip_latex_space_options(source, after);
+        if let Some((arg, next)) = read_latex_braced_arg(source, arg_start) {
+            args.push(arg);
+            index = next;
+        } else {
+            index = after;
+        }
+    }
+    args
+}
+
+fn extract_latex_command_arg_pairs(source: &str, command: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut index = 0usize;
+    while let Some(offset) = source[index..].find(command) {
+        let pos = index + offset;
+        let after = pos + command.len();
+        let bytes = source.as_bytes();
+        if after < bytes.len() && is_ascii_command_char(bytes[after]) {
+            index = after;
+            continue;
+        }
+        let first_start = skip_latex_space_options(source, after);
+        if let Some((first, next)) = read_latex_braced_arg(source, first_start) {
+            if let Some((second, tail)) = read_latex_braced_arg(source, next) {
+                pairs.push((first, second));
+                index = tail;
+            } else {
+                index = next;
+            }
+        } else {
+            index = after;
+        }
+    }
+    pairs
+}
+
+fn split_latex_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .filter_map(normalize_latex_path)
+        .collect::<Vec<_>>()
+}
+
+fn extract_graphicspath_dirs(source: &str) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for arg in extract_latex_command_args(source, "\\graphicspath") {
+        let mut index = 0usize;
+        while let Some((dir, next)) = read_latex_braced_arg(&arg, index) {
+            if let Some(cleaned) = normalize_latex_path(&dir) {
+                dirs.push(cleaned.trim_matches('/').to_string());
+            }
+            index = next;
+        }
+    }
+    let mut seen = HashSet::new();
+    dirs.retain(|item| seen.insert(item.clone()));
+    dirs
+}
+
+fn has_latex_extension(target: &str) -> bool {
+    Path::new(target).extension().and_then(|value| value.to_str()).is_some()
+}
+
+fn combine_relative_parts(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|part| part.trim().trim_matches('/'))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn current_parent_relative(current_relative: &str) -> String {
+    Path::new(current_relative)
+        .parent()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .replace('\\', "/")
+}
+
+fn candidate_latex_relatives(
+    current_relative: &str,
+    target: &str,
+    search_dirs: &[String],
+    fallback_extensions: &[&str],
+) -> Vec<String> {
+    let Some(cleaned) = normalize_latex_path(target) else { return Vec::new(); };
+    let mut base_dirs = Vec::<String>::new();
+    if cleaned.starts_with('/') {
+        base_dirs.push(String::new());
+    } else if search_dirs.is_empty() {
+        let parent = current_parent_relative(current_relative);
+        base_dirs.push(parent);
+        base_dirs.push(String::new());
+    } else {
+        let parent = current_parent_relative(current_relative);
+        for dir in search_dirs {
+            let normalized_dir = dir.trim().trim_matches('/').to_string();
+            base_dirs.push(combine_relative_parts(&[&parent, &normalized_dir]));
+            base_dirs.push(normalized_dir);
+        }
+        base_dirs.push(parent);
+        base_dirs.push(String::new());
+    }
+    let mut seen_dirs = HashSet::new();
+    base_dirs.retain(|item| seen_dirs.insert(item.clone()));
+
+    let target_part = cleaned.trim_start_matches('/');
+    let mut candidates = Vec::new();
+    for base in base_dirs {
+        let base_candidate = combine_relative_parts(&[&base, target_part]);
+        if base_candidate.is_empty() {
+            continue;
+        }
+        candidates.push(base_candidate.clone());
+        if !has_latex_extension(&base_candidate) {
+            for extension in fallback_extensions {
+                let ext = extension.trim_start_matches('.');
+                if !ext.is_empty() {
+                    candidates.push(format!("{base_candidate}.{ext}"));
+                }
+            }
+        }
+    }
+    let mut seen_candidates = HashSet::new();
+    candidates.retain(|item| seen_candidates.insert(item.clone()));
+    candidates
+}
+
+fn first_existing_candidate(root: &Path, candidates: &[String]) -> Option<String> {
+    for candidate in candidates {
+        if let Ok(path) = safe_join(root, candidate) {
+            if path.is_file() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_parsable_latex_dependency(relative: &str) -> bool {
+    matches!(
+        Path::new(relative)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "tex" | "ltx" | "cls" | "sty" | "bbx" | "cbx" | "cfg" | "def" | "clo" | "ldf"
+    )
+}
+
+fn add_latex_dependency(
+    root: &Path,
+    files: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    queue: &mut VecDeque<String>,
+    relative: String,
+) {
+    let normalized = relative.trim().replace('\\', "/").trim_start_matches('/').to_string();
+    if normalized.is_empty() || seen.contains(&normalized) {
+        return;
+    }
+    if let Ok(path) = safe_join(root, &normalized) {
+        if path.is_file() {
+            seen.insert(normalized.clone());
+            if is_parsable_latex_dependency(&normalized) {
+                queue.push_back(normalized.clone());
+            }
+            files.push(normalized);
+        }
+    }
+}
+
+fn resolve_required_latex_dependency(
+    root: &Path,
+    files: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    queue: &mut VecDeque<String>,
+    skipped: &mut Vec<String>,
+    current_relative: &str,
+    target: &str,
+    search_dirs: &[String],
+    fallback_extensions: &[&str],
+) {
+    let candidates = candidate_latex_relatives(current_relative, target, search_dirs, fallback_extensions);
+    if let Some(existing) = first_existing_candidate(root, &candidates) {
+        add_latex_dependency(root, files, seen, queue, existing);
+    } else if !target.trim().is_empty() {
+        skipped.push(format!("未找到引用文件：{} -> {}", current_relative, target.trim()));
+    }
+}
+
+fn resolve_optional_latex_dependency(
+    root: &Path,
+    files: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    queue: &mut VecDeque<String>,
+    current_relative: &str,
+    target: &str,
+    search_dirs: &[String],
+    fallback_extensions: &[&str],
+) {
+    let candidates = candidate_latex_relatives(current_relative, target, search_dirs, fallback_extensions);
+    if let Some(existing) = first_existing_candidate(root, &candidates) {
+        add_latex_dependency(root, files, seen, queue, existing);
+    }
+}
+
+fn collect_latex_dependency_files(root: &Path, main_tex: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let main = normalize_latex_path(main_tex).ok_or_else(|| "主 TeX 文件路径为空。".to_string())?;
+    let main_path = safe_join(root, &main)?;
+    if !main_path.is_file() {
+        return Err(format!("主 TeX 文件不存在：{}", main_path.display()));
+    }
+
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::new();
+    let mut global_graphic_dirs = Vec::<String>::new();
+    add_latex_dependency(root, &mut files, &mut seen, &mut queue, main.clone());
+
+    // Common compile helper files are useful in submission packages when they are explicitly present,
+    // but they are not scanned recursively and are never used to pull in the entire project.
+    for optional in [".latexmkrc", "latexmkrc"] {
+        if let Ok(path) = safe_join(root, optional) {
+            if path.is_file() {
+                add_latex_dependency(root, &mut files, &mut seen, &mut queue, optional.to_string());
+            }
+        }
+    }
+
+    let main_stem = Path::new(&main).with_extension("bbl").to_string_lossy().replace('\\', "/");
+    if let Ok(path) = safe_join(root, &main_stem) {
+        if path.is_file() {
+            add_latex_dependency(root, &mut files, &mut seen, &mut queue, main_stem);
+        }
+    }
+
+    while let Some(current_relative) = queue.pop_front() {
+        let path = safe_join(root, &current_relative)?;
+        let Ok(source) = fs::read_to_string(&path) else { continue; };
+        let source = strip_latex_comments(&source);
+        let mut graphic_dirs = extract_graphicspath_dirs(&source);
+        global_graphic_dirs.append(&mut graphic_dirs);
+        let mut seen_graphic_dirs = HashSet::new();
+        global_graphic_dirs.retain(|item| seen_graphic_dirs.insert(item.clone()));
+
+        for target in extract_latex_command_args(&source, "\\input") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &["tex", "ltx", "tikz", "pgf"]);
+        }
+        for target in extract_latex_command_args(&source, "\\include") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &["tex", "ltx"]);
+        }
+        for target in extract_latex_command_args(&source, "\\subfile") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &["tex", "ltx"]);
+        }
+        for (dir, target) in extract_latex_command_arg_pairs(&source, "\\import")
+            .into_iter()
+            .chain(extract_latex_command_arg_pairs(&source, "\\subimport"))
+            .chain(extract_latex_command_arg_pairs(&source, "\\inputfrom")) {
+            let combined = combine_relative_parts(&[&dir, &target]);
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &combined, &[], &["tex", "ltx"]);
+        }
+
+        for target in extract_latex_command_args(&source, "\\includegraphics")
+            .into_iter()
+            .chain(extract_latex_command_args(&source, "\\includesvg")) {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &global_graphic_dirs, &["pdf", "png", "jpg", "jpeg", "eps", "svg"]);
+        }
+        for target in extract_latex_command_args(&source, "\\lstinputlisting") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &[]);
+        }
+        for (_, target) in extract_latex_command_arg_pairs(&source, "\\inputminted") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &[]);
+        }
+
+        for target in extract_latex_command_args(&source, "\\addbibresource") {
+            resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &["bib"]);
+        }
+        for bibliography_group in extract_latex_command_args(&source, "\\bibliography") {
+            for target in split_latex_csv(&bibliography_group) {
+                resolve_required_latex_dependency(root, &mut files, &mut seen, &mut queue, &mut skipped, &current_relative, &target, &[], &["bib"]);
+            }
+        }
+
+        for class_name in extract_latex_command_args(&source, "\\documentclass") {
+            for target in split_latex_csv(&class_name) {
+                resolve_optional_latex_dependency(root, &mut files, &mut seen, &mut queue, &current_relative, &target, &[], &["cls"]);
+            }
+        }
+        for package_group in extract_latex_command_args(&source, "\\usepackage")
+            .into_iter()
+            .chain(extract_latex_command_args(&source, "\\RequirePackage"))
+            .chain(extract_latex_command_args(&source, "\\LoadClass")) {
+            for target in split_latex_csv(&package_group) {
+                resolve_optional_latex_dependency(root, &mut files, &mut seen, &mut queue, &current_relative, &target, &[], &["sty", "cls"]);
+            }
+        }
+        for style_group in extract_latex_command_args(&source, "\\bibliographystyle") {
+            for target in split_latex_csv(&style_group) {
+                resolve_optional_latex_dependency(root, &mut files, &mut seen, &mut queue, &current_relative, &target, &[], &["bst"]);
+            }
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    skipped.sort();
+    skipped.dedup();
+    Ok((files, skipped))
+}
+
+fn collect_markdown_submission_files(root: &Path, main_markdown: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let main = normalize_latex_path(main_markdown).ok_or_else(|| "主 Markdown 文件路径为空。".to_string())?;
+    let path = safe_join(root, &main)?;
+    if !path.is_file() {
+        return Err(format!("主 Markdown 文件不存在：{}", path.display()));
+    }
+    let source = fs::read_to_string(&path).map_err(|error| format!("无法读取 Markdown：{error}"))?;
+    let mut files = vec![main.clone()];
+    let mut skipped = Vec::new();
+    for target in extract_markdown_image_targets(&source) {
+        let relative = workspace_asset_relative(&main, &target);
+        match safe_join(root, &relative) {
+            Ok(asset_path) if asset_path.is_file() => files.push(relative),
+            _ => skipped.push(format!("未找到引用资源：{} -> {}", main, target)),
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok((files, skipped))
+}
+
+#[tauri::command]
+fn publish_markdown_profile(root_dir: String, relative_path: String, profile: PublishProfile) -> Result<PackageExportResult, String> {
+    let root = PathBuf::from(root_dir);
+    let md_path = safe_join(&root, &relative_path)?;
+    if !md_path.exists() { return Err(format!("Markdown 文件不存在：{}", md_path.display())); }
+    let source = fs::read_to_string(&md_path).map_err(|error| format!("无法读取 Markdown：{error}"))?;
+    let stem = md_path.file_stem().and_then(|value| value.to_str()).unwrap_or("post");
+    let slug = slugify(stem);
+    let title = markdown_title(&source, stem);
+    let mut body = strip_yaml_frontmatter(&source);
+    let output_rel = if profile.engine == "jekyll" {
+        format!("{}/{}-{}.md", profile.content_dir.trim_matches('/'), safe_timestamp(), slug)
+    } else {
+        format!("{}/{}/index.md", profile.content_dir.trim_matches('/'), slug)
+    };
+    let output_path = safe_join(&root, &output_rel)?;
+    let mut copied = Vec::new();
+    let mut skipped = Vec::new();
+    if profile.resource_strategy == "copy-local" {
+        for target in extract_markdown_image_targets(&source) {
+            let asset_relative = workspace_asset_relative(&relative_path, &target);
+            let file_name = Path::new(&asset_relative).file_name().and_then(|value| value.to_str()).unwrap_or("asset").to_string();
+            let asset_dest = format!("{}/{}", profile.asset_dir.trim_matches('/'), file_name);
+            let source_path = safe_join(&root, &asset_relative)?;
+            let target_path = safe_join(&root, &asset_dest)?;
+            if source_path.is_file() {
+                if let Some(parent) = target_path.parent() { fs::create_dir_all(parent).map_err(|error| format!("无法创建资源目录：{error}"))?; }
+                match fs::copy(&source_path, &target_path) {
+                    Ok(_) => copied.push(asset_dest.clone()),
+                    Err(error) => skipped.push(format!("{asset_relative} ({error})")),
+                }
+                body = body.replace(&target, &public_asset_path(&profile.asset_dir, &file_name));
+            }
+        }
+    }
+    let frontmatter = if profile.frontmatter_mode == "toml" {
+        format!("+++\ntitle = \"{}\"\ndate = \"{}\"\ndraft = {}\nscholia_source = \"{}\"\n+++\n\n", title.replace('"', "\\\""), safe_timestamp(), profile.draft.unwrap_or(true), relative_path)
+    } else {
+        format!("---\ntitle: \"{}\"\ndate: \"{}\"\ndraft: {}\nscholia_source: \"{}\"\n---\n\n", title.replace('"', "\\\""), safe_timestamp(), profile.draft.unwrap_or(true), relative_path)
+    };
+    if let Some(parent) = output_path.parent() { fs::create_dir_all(parent).map_err(|error| format!("无法创建发布目录：{error}"))?; }
+    fs::write(&output_path, format!("{frontmatter}{body}\n")).map_err(|error| format!("无法写入发布文件：{error}"))?;
+    copied.push(output_rel.clone());
+    let manifest_path = write_package_manifest(output_path.parent().unwrap_or(&root), &format!("{} publish profile", profile.name), &copied, &skipped, &[format!("Engine: {}", profile.engine), format!("Profile ID: {}", profile.id), format!("Base URL: {}", profile.base_url.unwrap_or_default())])?;
+    Ok(PackageExportResult { ok: skipped.is_empty(), output_dir: output_path.parent().unwrap_or(&root).to_string_lossy().to_string(), copied_files: copied, skipped_files: skipped, manifest_path })
+}
+
+fn package_output_dir(root: &Path, output_root: Option<String>, fallback_folder: &str, prefix: &str) -> Result<PathBuf, String> {
+    let timestamp = safe_timestamp();
+    let base = output_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join(".paper-notes").join(fallback_folder));
+    let output_dir = base.join(format!("{prefix}-{timestamp}"));
+    fs::create_dir_all(&output_dir).map_err(|error| format!("无法创建导出目录 {}：{error}", output_dir.display()))?;
+    Ok(output_dir)
+}
+
+#[tauri::command]
+fn export_submission_package(root_dir: String, main_tex: Option<String>, main_markdown: Option<String>, pdf_path: Option<String>, output_root: Option<String>) -> Result<PackageExportResult, String> {
+    let root = PathBuf::from(root_dir);
+    let output_dir = package_output_dir(&root, output_root, "submission-packages", "submission-package")?;
+    let tex_entry = main_tex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let markdown_entry = main_markdown
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (mut candidates, dependency_skips) = if let Some(path) = tex_entry {
+        collect_latex_dependency_files(&root, path)?
+    } else if let Some(path) = markdown_entry {
+        collect_markdown_submission_files(&root, path)?
+    } else {
+        return Err("投稿包导出需要打开当前 TeX 文件，或在项目设置中指定主 TeX 文件。".into());
+    };
+    candidates.sort();
+    candidates.dedup();
+    let mut copied = Vec::new();
+    let mut skipped = dependency_skips;
+    for relative in candidates { copy_relative_file(&root, &relative, &output_dir, &mut copied, &mut skipped); }
+    if let Some(pdf) = pdf_path.filter(|value| !value.trim().is_empty()) {
+        let pdf_path = PathBuf::from(&pdf);
+        if pdf_path.is_file() {
+            let target = output_dir.join("compiled").join(pdf_path.file_name().and_then(|value| value.to_str()).unwrap_or("paper.pdf"));
+            if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|error| format!("无法创建 compiled 目录：{error}"))?; }
+            match fs::copy(&pdf_path, &target) {
+                Ok(_) => copied.push(normalized_relative(&output_dir, &target)),
+                Err(error) => skipped.push(format!("{pdf} ({error})")),
+            }
+        }
+    }
+    let notes = vec![
+        "This folder is a source submission package. Review README and compile instructions before uploading to a journal/conference system.".to_string(),
+        "Files are collected from the active/main TeX dependency graph instead of copying the whole workspace.".to_string(),
+    ];
+    let manifest_path = write_package_manifest(&output_dir, "Submission package", &copied, &skipped, &notes)?;
+    Ok(PackageExportResult { ok: skipped.is_empty(), output_dir: output_dir.to_string_lossy().to_string(), copied_files: copied, skipped_files: skipped, manifest_path })
+}
+
+#[tauri::command]
+fn export_shared_review_package(root_dir: String, pdf_path: Option<String>, include_resolved: bool, output_root: Option<String>) -> Result<PackageExportResult, String> {
+    let root = PathBuf::from(root_dir);
+    let output_dir = package_output_dir(&root, output_root, "shared-review-packages", "shared-review-package")?;
+    let mut copied = Vec::new();
+    let mut skipped = Vec::new();
+    for relative in [".paper-notes/annotations.jsonl", ".paper-notes/review-items.jsonl", ".paper-notes/review-summary.md"] {
+        copy_relative_file(&root, relative, &output_dir, &mut copied, &mut skipped);
+    }
+    let mut source_context = Vec::new();
+    collect_package_files(&root, &root, &mut source_context)?;
+    source_context.sort();
+    source_context.dedup();
+    for relative in source_context {
+        let ext = Path::new(&relative).extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if !matches!(ext.as_str(), "tex" | "ltx" | "md" | "markdown" | "bib" | "cls" | "sty" | "bst") { continue; }
+        let Ok(source) = safe_join(&root, &relative) else { skipped.push(relative); continue; };
+        if !source.is_file() { skipped.push(relative); continue; }
+        let target = output_dir.join("source-context").join(&relative);
+        if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|error| format!("无法创建源码上下文目录：{error}"))?; }
+        match fs::copy(&source, &target) {
+            Ok(_) => copied.push(format!("source-context/{relative}")),
+            Err(error) => skipped.push(format!("{relative} ({error})")),
+        }
+    }
+    if let Some(pdf) = pdf_path.filter(|value| !value.trim().is_empty()) {
+        let pdf_path = PathBuf::from(&pdf);
+        if pdf_path.is_file() {
+            let target = output_dir.join("review.pdf");
+            match fs::copy(&pdf_path, &target) {
+                Ok(_) => copied.push("review.pdf".into()),
+                Err(error) => skipped.push(format!("{pdf} ({error})")),
+            }
+        } else {
+            skipped.push(pdf);
+        }
+    }
+    let notes = vec![
+        "Shared review package includes PDF, review-items and annotation JSONL when available.".to_string(),
+        format!("Resolved annotations included: {include_resolved}"),
+    ];
+    let manifest_path = write_package_manifest(&output_dir, "Shared review package", &copied, &skipped, &notes)?;
+    Ok(PackageExportResult { ok: skipped.is_empty(), output_dir: output_dir.to_string_lossy().to_string(), copied_files: copied, skipped_files: skipped, manifest_path })
+}
+
+fn hash_text(value: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+#[tauri::command]
+fn compile_tikz_preview(root_dir: String, current_relative_path: String, source: String, tool_paths: Option<ToolPathOverrides>) -> Result<String, String> {
+    let root = PathBuf::from(root_dir);
+    let cache_dir = root.join(".paper-notes").join("tikz-cache").join(hash_text(&format!("{current_relative_path}\n{source}")));
+    fs::create_dir_all(&cache_dir).map_err(|error| format!("无法创建 TikZ 缓存目录：{error}"))?;
+    let tex_path = cache_dir.join("preview.tex");
+    let pdf_path = cache_dir.join("preview.pdf");
+    if !pdf_path.exists() {
+        let wrapped = format!("\\documentclass[tikz,border=2pt]{{standalone}}\n\\usepackage{{tikz}}\n\\usepackage{{pgfplots}}\n\\pgfplotsset{{compat=1.18}}\n\\begin{{document}}\n{}\n\\end{{document}}\n", source);
+        fs::write(&tex_path, wrapped).map_err(|error| format!("无法写入 TikZ 临时文件：{error}"))?;
+        let overrides = tool_paths.unwrap_or_default();
+        let xelatex = tool_program("xelatex", &overrides);
+        let output = Command::new(&xelatex)
+            .current_dir(&cache_dir)
+            .args(["-interaction=nonstopmode", "-halt-on-error", "preview.tex"])
+            .output()
+            .map_err(|error| format!("无法执行 XeLaTeX 编译 TikZ：{error}"))?;
+        if !output.status.success() || !pdf_path.exists() {
+            return Err(format!("TikZ 编译失败：\n{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    let bytes = fs::read(&pdf_path).map_err(|error| format!("无法读取 TikZ PDF：{error}"))?;
+    Ok(format!("data:application/pdf;base64,{}", encode_base64(&bytes)))
+}
+
+fn conflicted_files_from_status(root: &Path) -> Vec<String> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root).args(["status", "--porcelain"]);
+    let output = cmd.output().ok();
+    let text = output.map(|out| String::from_utf8_lossy(&out.stdout).to_string()).unwrap_or_default();
+    text.lines().filter_map(|line| {
+        if line.len() < 4 { return None; }
+        let code = &line[..2];
+        let conflict = matches!(code, "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD");
+        conflict.then(|| line[3..].to_string())
+    }).collect()
+}
+
+#[tauri::command]
+fn git_pull_with_conflict_status(root_dir: String, branch: String, token: Option<String>) -> Result<GitSyncResult, String> {
+    let root = PathBuf::from(root_dir);
+    let branch = if branch.trim().is_empty() { "main" } else { branch.trim() };
+    let mut cmd = git_with_auth(Some(&root), token.as_deref());
+    cmd.args(["pull", "--no-rebase", "origin", branch]);
+    let output = cmd.output().map_err(|error| format!("无法执行 git pull：{error}"))?;
+    let log = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let conflicts = conflicted_files_from_status(&root);
+    Ok(GitSyncResult { ok: output.status.success() && conflicts.is_empty(), command: format!("git pull --no-rebase origin {branch}"), log, conflicted_files: conflicts })
+}
+
+#[tauri::command]
+fn git_push_current_branch(root_dir: String, branch: String, token: Option<String>) -> Result<GitSyncResult, String> {
+    let root = PathBuf::from(root_dir);
+    let branch = if branch.trim().is_empty() { "main" } else { branch.trim() };
+    let mut cmd = git_with_auth(Some(&root), token.as_deref());
+    cmd.args(["push", "origin", branch]);
+    let output = cmd.output().map_err(|error| format!("无法执行 git push：{error}"))?;
+    let log = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let conflicts = conflicted_files_from_status(&root);
+    Ok(GitSyncResult { ok: output.status.success() && conflicts.is_empty(), command: format!("git push origin {branch}"), log, conflicted_files: conflicts })
 }
 
 fn build_latex_blocking(root_dir: String, relative_path: String, tool_paths: Option<ToolPathOverrides>) -> Result<LatexBuildResult, String> {
@@ -1730,6 +2650,11 @@ fn open_pdf(path: String) -> Result<(), String> {
     open_path_or_url(&path)
 }
 
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    open_path_or_url(&path)
+}
+
 fn open_path_or_url(value: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1790,11 +2715,18 @@ pub fn run() {
             build_latex,
             build_markdown_pandoc,
             export_markdown_pandoc,
+            publish_markdown_profile,
+            export_submission_package,
+            export_shared_review_package,
+            compile_tikz_preview,
+            git_pull_with_conflict_status,
+            git_push_current_branch,
             find_latex_pdf,
             synctex_forward,
             synctex_reverse,
             clean_latex,
             open_pdf,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running markdown latex git desktop");
